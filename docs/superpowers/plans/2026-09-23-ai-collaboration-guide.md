@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create a standalone Chinese guide that lets Codex and Claude Code safely help non-Git users collaborate on this repository.
+**Goal:** Create a standalone Chinese instruction file that tells Codex and Claude Code how to operate this repository for two non-Git users.
 
-**Architecture:** A single Markdown document is the source of truth. It provides copyable AI prompts, a plain-language workflow, repository-specific safety rules, and recovery instructions.
+**Architecture:** A single Markdown document is the source of truth and addresses AI directly. It maps each member account to one persistent branch, mandates Chinese commit messages, and defines repository-specific safety and recovery behavior.
 
 **Tech Stack:** Markdown, Git, Conda, Codex, Claude Code.
 
@@ -12,29 +12,32 @@
 
 - Use simplified Chinese and tool-neutral language.
 - Include no account credentials, tokens, or passwords.
+- Treat the AI as the only reader; do not teach members to run Git commands.
+- Map `yf82289878` to branch `yf82289878` and `lyn18302` to branch `lyn18302`.
+- Require every commit message to use simplified Chinese.
 - Never instruct users or AI to upload `A题/`, `B题/`, `C题/`, `D题/`, `F题/`, `评估报告/`, `.docx`, `tmp/`, data, or output artifacts.
 - Use the existing Python 3.11 Conda convention in `environment.yml`.
 
 ---
 
-### Task 1: Write the AI collaboration guide
+### Task 1: Rewrite the AI collaboration guide
 
 **Files:**
-- Create: `docs/AI_COLLABORATION_GUIDE.md`
+- Modify: `docs/AI_COLLABORATION_GUIDE.md`
 
 **Interfaces:**
-- Consumes: a member's natural-language request and their local clone of `MeluYao/mathModelCup`.
+- Consumes: one of the member accounts `yf82289878` or `lyn18302` and their local clone of `MeluYao/mathModelCup`.
 - Produces: a safe AI-assisted workflow from local work through Pull Request.
 
-- [ ] **Step 1: Add a startup prompt for either Codex or Claude Code**
+- [ ] **Step 1: Replace member-facing teaching with direct AI instructions**
 
 ```markdown
-请先阅读 AI_COLLABORATION_GUIDE.md 和 README.md。你负责执行 Git 操作，但在删除文件、发送邀请、修改权限、公开仓库或推送前必须向我确认。赛题资料、数据和输出不得加入 Git。
+你是本仓库的 AI 执行者。先识别成员账号：yf82289878 使用同名分支 yf82289878；lyn18302 使用同名分支 lyn18302。你负责所有 Git 操作，不要求成员输入 Git 命令。
 ```
 
-- [ ] **Step 2: Document roles, branch workflow, and PR handoff**
+- [ ] **Step 2: Document fixed account branches, Chinese commits, and PR handoff**
 
-Include: synchronize `main`; use an intent-based branch name; run tests; let AI show `git status`; commit; push; create a PR; request review; do not merge without approval.
+Include: synchronize `main`; create or switch to the account-named branch; never create task branches; run tests; show `git status`; use a simplified-Chinese commit message; push; create a PR; request review; do not merge without approval.
 
 - [ ] **Step 3: Document project-specific modeling and environment conventions**
 
@@ -46,7 +49,7 @@ Include prompts for merge conflicts, accidental staging, a failed Conda environm
 
 - [ ] **Step 5: Validate required safety terms**
 
-Run: `rg -n "赛题|不.*Git|Pull Request|Conda|冲突|确认" docs/AI_COLLABORATION_GUIDE.md`
+Run: `rg -n "yf82289878|lyn18302|中文|赛题|Pull Request|Conda|冲突|确认" docs/AI_COLLABORATION_GUIDE.md`
 
 Expected: each workflow and safety topic appears at least once.
 
@@ -54,6 +57,6 @@ Expected: each workflow and safety topic appears at least once.
 
 ```bash
 git add docs/AI_COLLABORATION_GUIDE.md docs/superpowers/plans/2026-09-23-ai-collaboration-guide.md
-git commit -m "docs: add AI collaboration guide"
+git commit -m "文档：调整 AI 协作与账号分支规范"
 git push
 ```
