@@ -1,0 +1,22 @@
+# Supplied contest materials and temporary files
+A题/
+B题/
+C题/
+D题/
+F题/
+评估报告/
+*.docx
+tmp/
+
+# Local environments, data, and generated artifacts
+.conda/
+.venv/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+outputs/*
+!outputs/.gitkeep
+__pycache__/
+.pytest_cache/
+*.py[cod]
