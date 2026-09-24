@@ -35,10 +35,12 @@ def test_reporting_writes_submission_source_tables(tmp_path, schedule_case) -> N
     assert expected_method_files == {path.name for path in method_dir.iterdir()}
     assert (tmp_path / "method_comparison.csv").exists()
     assert (tmp_path / "summary.md").exists()
+    assert (tmp_path / "five_step_comparison.md").exists()
 
     comparison = pd.read_csv(tmp_path / "method_comparison.csv")
     assert comparison.loc[0, "validation"] == "PASS"
     assert comparison.loc[0, "delivered_box_count"] == len(data.boxes)
+    assert bool(comparison.loc[0, "pareto_nondominated"])
     summary = json.loads((method_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["validation"] == "PASS"
     assert summary["objective"]["trip_count"] == len(solution.trips)
@@ -67,3 +69,4 @@ def test_real_data_all_four_methods_return_valid_solutions(tmp_path) -> None:
         validate_q2_solution(data, arcs, solution).is_valid
         for solution in solutions.values()
     )
+    assert all(not solution.diagnostics.get("fallback") for solution in solutions.values())

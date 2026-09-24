@@ -1,33 +1,225 @@
-"""Reproducible minimum viable adaptive large-neighborhood search for Q2."""
+"""Reproducible adaptive large-neighborhood search for problem D question 2."""
 
 from __future__ import annotations
 
 from dataclasses import replace
+from math import exp
 from random import Random
 from time import perf_counter
-from typing import Mapping, Sequence, Tuple
+from typing import Dict, Mapping, Sequence, Tuple
 
 from .problem_d_q2 import InfeasibleQ2Error, Q2Data, Q2Solution, TripDraft, TripPlan, TripStop
-from .problem_d_q2_candidates import solve_candidate_method
+from .problem_d_q2_candidates import generate_initial_candidates
 from .problem_d_q2_geometry import ArcGeometry
 from .problem_d_q2_physics import evaluate_trip
-from .problem_d_q2_schedule import schedule_trips_greedy
+from .problem_d_q2_schedule import (
+    construct_resource_aware_boxwise_solution,
+    schedule_trips_greedy,
+)
 
 
-def _merge_stops(left: TripPlan, right: TripPlan, reverse: bool) -> Tuple[TripStop, ...]:
-    ordered = (right, left) if reverse else (left, right)
-    by_service = {}
-    service_order = []
-    for plan in ordered:
-        for stop in plan.stops:
-            if stop.service_id not in by_service:
-                service_order.append(stop.service_id)
-                by_service[stop.service_id] = []
-            by_service[stop.service_id].extend(stop.box_ids)
-    return tuple(
-        TripStop(service_id, tuple(by_service[service_id]))
-        for service_id in service_order
+DESTROY_OPERATORS = (
+    "random_box",
+    "worst_timeliness",
+    "high_energy",
+    "same_service",
+    "whole_trip",
+)
+REPAIR_OPERATORS = ("minimum_increment", "regret_2")
+
+
+def _plan_proxy_cost(data: Q2Data, plan: TripPlan) -> float:
+    timing = sum(
+        data.boxes[box_id].priority_weight
+        * plan.delivery_offsets_s[box_id]
+        / data.boxes[box_id].expected_time_s
+        for box_id in plan.box_ids
     )
+    return timing + plan.duration_s / 100_000.0 + plan.energy_kwh / 10_000.0
+
+
+def _annealing_score(solution: Q2Solution) -> float:
+    objective = solution.objective
+    return (
+        objective[0]
+        + objective[1] / 10_000_000.0
+        + objective[2] / 1_000_000.0
+        + objective[3] / 10_000_000.0
+    )
+
+
+def _weighted_choice(rng: Random, weights: Mapping[str, float]) -> str:
+    names = tuple(weights)
+    return rng.choices(names, weights=[weights[name] for name in names], k=1)[0]
+
+
+def _destroy_boxes(
+    data: Q2Data,
+    solution: Q2Solution,
+    operator: str,
+    remove_count: int,
+    rng: Random,
+) -> Tuple[str, ...]:
+    box_ids = [record.box_id for record in solution.deliveries]
+    if operator == "random_box":
+        return tuple(rng.sample(box_ids, min(remove_count, len(box_ids))))
+    if operator == "worst_timeliness":
+        ranked = sorted(
+            solution.deliveries,
+            key=lambda record: (
+                data.boxes[record.box_id].priority_weight
+                * record.delivery_time_s
+                / data.boxes[record.box_id].expected_time_s
+            ),
+            reverse=True,
+        )
+        return tuple(record.box_id for record in ranked[:remove_count])
+    if operator == "high_energy":
+        ranked_trips = sorted(
+            solution.trips,
+            key=lambda trip: trip.plan.energy_kwh / max(1, len(trip.plan.box_ids)),
+            reverse=True,
+        )
+        selected = [box_id for trip in ranked_trips for box_id in trip.plan.box_ids]
+        return tuple(selected[:remove_count])
+    if operator == "same_service":
+        anchor = rng.choice(box_ids)
+        service_id = data.boxes[anchor].service_id
+        related = [box_id for box_id in box_ids if data.boxes[box_id].service_id == service_id]
+        rng.shuffle(related)
+        if len(related) < remove_count:
+            remaining = [box_id for box_id in box_ids if box_id not in related]
+            rng.shuffle(remaining)
+            related.extend(remaining)
+        return tuple(related[:remove_count])
+    trip = rng.choice(solution.trips)
+    selected = list(trip.plan.box_ids)
+    if len(selected) < remove_count:
+        remaining = [box_id for box_id in box_ids if box_id not in selected]
+        rng.shuffle(remaining)
+        selected.extend(remaining[: remove_count - len(selected)])
+    return tuple(selected)
+
+
+def _remove_from_plans(
+    data: Q2Data,
+    arcs: Mapping[Tuple[str, str], ArcGeometry],
+    plans: Sequence[TripPlan],
+    removed_box_ids: Sequence[str],
+) -> list[TripPlan]:
+    removed = set(removed_box_ids)
+    retained = []
+    for plan in plans:
+        stops = tuple(
+            TripStop(stop.service_id, tuple(box for box in stop.box_ids if box not in removed))
+            for stop in plan.stops
+        )
+        stops = tuple(stop for stop in stops if stop.box_ids)
+        if stops:
+            retained.append(evaluate_trip(data, arcs, TripDraft(plan.model_id, stops)))
+    return retained
+
+
+def _inserted_stops(plan: TripPlan, box_id: str, service_id: str, max_stops: int):
+    existing_index = next(
+        (index for index, stop in enumerate(plan.stops) if stop.service_id == service_id),
+        None,
+    )
+    if existing_index is not None:
+        stops = list(plan.stops)
+        stop = stops[existing_index]
+        stops[existing_index] = TripStop(stop.service_id, stop.box_ids + (box_id,))
+        yield tuple(stops)
+    elif len(plan.stops) < max_stops:
+        new_stop = TripStop(service_id, (box_id,))
+        for position in range(len(plan.stops) + 1):
+            yield plan.stops[:position] + (new_stop,) + plan.stops[position:]
+
+
+def _insertion_options(
+    data: Q2Data,
+    arcs: Mapping[Tuple[str, str], ArcGeometry],
+    plans: Sequence[TripPlan],
+    box_id: str,
+    single_plans: Mapping[str, Sequence[TripPlan]],
+    max_stops: int,
+) -> list[tuple[float, list[TripPlan]]]:
+    options: list[tuple[float, list[TripPlan]]] = []
+    service_id = data.boxes[box_id].service_id
+    for index, plan in enumerate(plans):
+        old_cost = _plan_proxy_cost(data, plan)
+        for stops in _inserted_stops(plan, box_id, service_id, max_stops):
+            try:
+                inserted = evaluate_trip(data, arcs, TripDraft(plan.model_id, stops))
+            except InfeasibleQ2Error:
+                continue
+            updated = list(plans)
+            updated[index] = inserted
+            options.append((_plan_proxy_cost(data, inserted) - old_cost, updated))
+    for single in single_plans[box_id]:
+        options.append((_plan_proxy_cost(data, single) + 0.001, list(plans) + [single]))
+    options.sort(key=lambda item: (item[0], tuple(plan.signature for plan in item[1])))
+    return options
+
+
+def _repair_plans(
+    data: Q2Data,
+    arcs: Mapping[Tuple[str, str], ArcGeometry],
+    plans: Sequence[TripPlan],
+    removed_box_ids: Sequence[str],
+    single_plans: Mapping[str, Sequence[TripPlan]],
+    operator: str,
+    max_stops: int,
+) -> list[TripPlan]:
+    repaired = list(plans)
+    remaining = list(removed_box_ids)
+    while remaining:
+        if operator == "minimum_increment":
+            box_id = min(
+                remaining,
+                key=lambda current: (
+                    data.boxes[current].hard_deadline_s
+                    if data.boxes[current].hard_deadline_s is not None
+                    else float("inf"),
+                    -data.boxes[current].priority_weight,
+                    current,
+                ),
+            )
+            options = _insertion_options(
+                data, arcs, repaired, box_id, single_plans, max_stops
+            )
+        else:
+            regret_options = []
+            for current in remaining:
+                current_options = _insertion_options(
+                    data, arcs, repaired, current, single_plans, max_stops
+                )
+                if not current_options:
+                    continue
+                second = current_options[1][0] if len(current_options) > 1 else current_options[0][0] + 1.0
+                regret_options.append((second - current_options[0][0], current, current_options))
+            if not regret_options:
+                raise InfeasibleQ2Error("ALNS repair has no insertion option")
+            _, box_id, options = max(regret_options, key=lambda item: (item[0], item[1]))
+        if not options:
+            raise InfeasibleQ2Error(f"ALNS cannot repair box {box_id}")
+        repaired = options[0][1]
+        remaining.remove(box_id)
+    return repaired
+
+
+def _update_weight(
+    weights: Dict[str, float],
+    scores: Dict[str, float],
+    uses: Dict[str, int],
+    reaction: float = 0.20,
+) -> None:
+    for name in weights:
+        if uses[name]:
+            observed = max(0.1, scores[name] / uses[name])
+            weights[name] = (1.0 - reaction) * weights[name] + reaction * observed
+        scores[name] = 0.0
+        uses[name] = 0
 
 
 def solve_alns(
@@ -37,69 +229,130 @@ def solve_alns(
     iterations: int = 10_000,
     *,
     initial_solution: Q2Solution | None = None,
+    max_stops: int = 3,
 ) -> Q2Solution:
+    """Run destroy/repair ALNS with deterministic resource decoding."""
     started = perf_counter()
     rng = Random(seed)
-    initial = initial_solution or solve_candidate_method(data, arcs, time_limit_s=30.0)
-    current = replace(initial, method="alns")
-    plans = [trip.plan for trip in current.trips]
+    initial_candidates = generate_initial_candidates(data, arcs, max_stops=max_stops)
+    single_plans: Dict[str, list[TripPlan]] = {box_id: [] for box_id in data.boxes}
+    for plan in initial_candidates:
+        if len(plan.box_ids) == 1:
+            single_plans[plan.box_ids[0]].append(plan)
+    independent_base = construct_resource_aware_boxwise_solution(
+        data, initial_candidates, "alns"
+    )
+    if initial_solution is None:
+        initial = independent_base
+        initialization = "independent_resource_aware"
+    else:
+        initial = replace(initial_solution, method="alns")
+        initialization = "provided_solution"
+
+    current = initial
+    best = initial
+    destroy_weights = {name: 1.0 for name in DESTROY_OPERATORS}
+    repair_weights = {name: 1.0 for name in REPAIR_OPERATORS}
+    destroy_scores = {name: 0.0 for name in DESTROY_OPERATORS}
+    repair_scores = {name: 0.0 for name in REPAIR_OPERATORS}
+    destroy_uses = {name: 0 for name in DESTROY_OPERATORS}
+    repair_uses = {name: 0 for name in REPAIR_OPERATORS}
     accepted = 0
-    attempted = 0
+    improving = 0
+    feasible_moves = 0
+    repair_feasibility_fallbacks = 0
+    restarts = 0
+    no_improvement = 0
+    history = [(0, best.objective)]
+    initial_temperature = max(0.01, 0.05 * _annealing_score(initial))
 
-    for _ in range(max(0, iterations)):
-        if len(plans) < 2:
-            break
-        left_index, right_index = sorted(rng.sample(range(len(plans)), 2))
-        left = plans[left_index]
-        right = plans[right_index]
-        if left.model_id != right.model_id:
-            continue
-        attempted += 1
-        merged_options = []
-        for reverse in (False, True):
-            try:
-                merged_options.append(
-                    evaluate_trip(
-                        data,
-                        arcs,
-                        TripDraft(left.model_id, _merge_stops(left, right, reverse)),
-                    )
-                )
-            except InfeasibleQ2Error:
-                continue
-        if not merged_options:
-            continue
-        merged = min(
-            merged_options,
-            key=lambda plan: (plan.duration_s, plan.energy_kwh, plan.signature),
+    for iteration in range(1, max(0, iterations) + 1):
+        destroy = _weighted_choice(rng, destroy_weights)
+        repair = _weighted_choice(rng, repair_weights)
+        destroy_uses[destroy] += 1
+        repair_uses[repair] += 1
+        remove_count = min(
+            len(data.boxes),
+            max(1, int(round(len(data.boxes) * rng.uniform(0.02, 0.08)))),
         )
-        candidate_plans = [
-            plan
-            for index, plan in enumerate(plans)
-            if index not in (left_index, right_index)
-        ] + [merged]
+        removed = _destroy_boxes(data, current, destroy, remove_count, rng)
+        partial = _remove_from_plans(
+            data, arcs, [trip.plan for trip in current.trips], removed
+        )
         try:
-            candidate = schedule_trips_greedy(data, candidate_plans, method="alns")
+            repaired = _repair_plans(
+                data,
+                arcs,
+                partial,
+                removed,
+                single_plans,
+                repair,
+                max_stops,
+            )
+            candidate = schedule_trips_greedy(data, repaired, method="alns")
         except InfeasibleQ2Error:
-            continue
-        if candidate.objective < current.objective:
+            safe_repair = list(partial) + [
+                min(single_plans[box_id], key=lambda plan: _plan_proxy_cost(data, plan))
+                for box_id in removed
+            ]
+            try:
+                candidate = schedule_trips_greedy(data, safe_repair, method="alns")
+                repair_feasibility_fallbacks += 1
+            except InfeasibleQ2Error:
+                candidate = independent_base
+                repair_feasibility_fallbacks += 1
+        feasible_moves += 1
+        fraction = iteration / max(1, iterations)
+        temperature = initial_temperature * (0.001 ** fraction)
+        delta = _annealing_score(candidate) - _annealing_score(current)
+        accepted_move = delta <= 0.0 or rng.random() < exp(-delta / max(temperature, 1e-12))
+        reward = 0.0
+        if accepted_move:
             current = candidate
-            plans = [trip.plan for trip in current.trips]
             accepted += 1
+            reward = 0.5 if delta > 0.0 else 2.0
+            if current.objective < best.objective:
+                best = current
+                improving += 1
+                no_improvement = 0
+                reward = 5.0
+            else:
+                no_improvement += 1
+        else:
+            no_improvement += 1
+        destroy_scores[destroy] += reward
+        repair_scores[repair] += reward
 
-    diagnostics = dict(current.diagnostics)
+        if iteration % 50 == 0:
+            _update_weight(destroy_weights, destroy_scores, destroy_uses)
+            _update_weight(repair_weights, repair_scores, repair_uses)
+            history.append((iteration, best.objective))
+        if no_improvement >= 250:
+            current = best
+            no_improvement = 0
+            restarts += 1
+
+    diagnostics = dict(best.diagnostics)
+    diagnostics.pop("fallback", None)
     diagnostics.update(
         {
             "seed": seed,
             "iterations_requested": iterations,
-            "merge_attempts": attempted,
+            "feasible_moves": feasible_moves,
+            "repair_feasibility_fallbacks": repair_feasibility_fallbacks,
             "accepted_moves": accepted,
-            "operator_weights": {"pair_merge": 1.0},
+            "improving_moves": improving,
+            "restarts": restarts,
+            "destroy_weights": destroy_weights,
+            "repair_weights": repair_weights,
+            "convergence_history": history,
+            "initialization": initialization,
         }
     )
     return replace(
-        current,
+        best,
         method="alns",
         runtime_s=perf_counter() - started,
+        solver_status="FEASIBLE",
         diagnostics=diagnostics,
     )

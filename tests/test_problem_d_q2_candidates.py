@@ -29,3 +29,5 @@ def test_candidate_solver_covers_each_box_once(schedule_case) -> None:
     assert sorted(delivered) == sorted(data.boxes)
     assert len(delivered) == len(set(delivered))
     assert validate_q2_solution(data, arcs, solution).is_valid
+    assert solution.solver_status in {"FEASIBLE", "OPTIMAL"}
+    assert not solution.diagnostics.get("fallback")

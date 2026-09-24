@@ -152,7 +152,42 @@ def _comparison_row(
         "minimum_return_soc_percent": checks["minimum_return_soc_percent"],
         "fallback": solution.diagnostics.get("fallback", ""),
         "backend": solution.diagnostics.get("backend", ""),
+        "own_incumbent": not bool(solution.diagnostics.get("fallback")),
     }
+
+
+def _add_decision_columns(comparison: pd.DataFrame) -> pd.DataFrame:
+    result = comparison.copy()
+    objective_columns = [
+        "normalized_weighted_delivery_time",
+        "makespan_s",
+        "energy_kwh",
+        "trip_count",
+    ]
+    nondominated = []
+    for index, row in result.iterrows():
+        if row["validation"] != "PASS":
+            nondominated.append(False)
+            continue
+        dominated = False
+        for other_index, other in result.iterrows():
+            if other_index == index or other["validation"] != "PASS":
+                continue
+            weakly_better = all(other[column] <= row[column] for column in objective_columns)
+            strictly_better = any(other[column] < row[column] for column in objective_columns)
+            if weakly_better and strictly_better:
+                dominated = True
+                break
+        nondominated.append(not dominated)
+    result["pareto_nondominated"] = nondominated
+    valid_order = (
+        result[result["validation"] == "PASS"]
+        .sort_values(objective_columns + ["runtime_s", "method"])
+        .index
+    )
+    ranks = {index: rank for rank, index in enumerate(valid_order, start=1)}
+    result["lexicographic_rank"] = [ranks.get(index, 0) for index in result.index]
+    return result
 
 
 def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Solution]) -> str:
@@ -172,10 +207,10 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
                 f"若只考虑阶段一保底运行时间，{fastest} 最短；正式推荐需等待阶段二独立解。"
             )
         else:
+            fastest = own_incumbents.sort_values("runtime_s").iloc[0]["method"]
             recommendation = (
-                "按统一词典序目标，当前推荐："
-                + "、".join(own_incumbents["method"])
-                + "。目标并列时优先选择无回退、运行时间更短且可解释性更强的方案。"
+                f"按统一词典序目标与同目标运行时间规则，当前推荐：{fastest}。"
+                "目标并列时优先选择无回退、运行时间更短且可解释性更强的方案。"
             )
     display = comparison[
         [
@@ -203,6 +238,50 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
             table,
             "",
             "说明：比较仅在通过独立约束校验的方案之间进行；fallback 非空表示该方法本轮未获得自己的可行 incumbent。",
+            "",
+        ]
+    )
+
+
+def _five_step_markdown(comparison: pd.DataFrame) -> str:
+    valid = comparison[comparison["validation"] == "PASS"]
+    best = valid.sort_values(
+        [
+            "normalized_weighted_delivery_time",
+            "makespan_s",
+            "energy_kwh",
+            "trip_count",
+            "runtime_s",
+        ]
+    ).iloc[0]
+    pareto_methods = "、".join(
+        comparison.loc[comparison["pareto_nondominated"], "method"].astype(str)
+    )
+    return "\n".join(
+        [
+            "# D题第二问阶段二五步比较",
+            "",
+            "## Step 1：冻结统一评价规则",
+            "",
+            "所有方法共享物理计算、硬约束、独立校验器和四维词典序目标：加权归一化送达时间、完工时间、能耗、架次数。",
+            "",
+            "## Step 2：四个独立求解器",
+            "",
+            "一体化模型、候选架次法和 ALNS 不读取其他纯方法的最终解；混合算法按定义调用候选法与 ALNS。`own_incumbent=true` 表示结果不是异常回退。",
+            "",
+            "## Step 3：统一计算预算",
+            "",
+            "本表记录每种方法的实际墙钟时间、求解状态和诊断信息；正式长时实验应在固定硬件上按预设时限重复。",
+            "",
+            "## Step 4：独立校验与指标汇总",
+            "",
+            f"通过独立校验的方法数：{len(valid)}/{len(comparison)}。不可行结果不参与排序。",
+            "",
+            "## Step 5：Pareto 与推荐",
+            "",
+            f"Pareto 非支配方法：{pareto_methods}。按冻结的词典序及同目标耗时规则，推荐 `{best['method']}`。",
+            "",
+            "完整数值见 `method_comparison.csv`；推荐仅对本次预算与参数有效。",
             "",
         ]
     )
@@ -276,10 +355,13 @@ def write_q2_outputs(
         )
         comparison_rows.append(_comparison_row(method, data, solution, report))
 
-    comparison = pd.DataFrame(comparison_rows)
+    comparison = _add_decision_columns(pd.DataFrame(comparison_rows))
     _write_csv(comparison, output_dir / "method_comparison.csv")
     (output_dir / "summary.md").write_text(
         _summary_markdown(comparison, solutions), encoding="utf-8"
+    )
+    (output_dir / "five_step_comparison.md").write_text(
+        _five_step_markdown(comparison), encoding="utf-8"
     )
 
 
@@ -305,14 +387,15 @@ def run_methods(
         elif method == "candidate":
             solution = solve_candidate_method(data, arcs, time_limit_s=effective_limit)
         elif method == "alns":
-            solution = solve_alns(data, arcs, seed=seed, iterations=100 if quick else 10_000)
+            solution = solve_alns(data, arcs, seed=seed, iterations=20 if quick else 10_000)
         else:
             solution = solve_hybrid(
                 data,
                 arcs,
                 seed=seed,
-                iterations=50 if quick else 10_000,
+                iterations=10 if quick else 10_000,
                 rounds=1 if quick else 2,
+                time_limit_s=effective_limit,
             )
         report = validate_q2_solution(data, arcs, solution)
         if not report.is_valid:

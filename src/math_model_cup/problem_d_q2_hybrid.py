@@ -18,6 +18,7 @@ def solve_hybrid(
     seed: int = 0,
     iterations: int = 10_000,
     rounds: int = 2,
+    time_limit_s: float = 30.0,
 ) -> Q2Solution:
     started = perf_counter()
     if rounds < 1:
@@ -25,7 +26,9 @@ def solve_hybrid(
     pool: Dict[Tuple[object, ...], TripPlan] = {
         plan.signature: plan for plan in generate_initial_candidates(data, arcs)
     }
-    current = solve_candidate_method(data, arcs, time_limit_s=30.0, candidates=tuple(pool.values()))
+    current = solve_candidate_method(
+        data, arcs, time_limit_s=time_limit_s, candidates=tuple(pool.values())
+    )
     objective_history = [current.objective]
     for round_index in range(rounds):
         improved = solve_alns(
@@ -40,7 +43,7 @@ def solve_hybrid(
         refreshed = solve_candidate_method(
             data,
             arcs,
-            time_limit_s=30.0,
+            time_limit_s=time_limit_s,
             candidates=tuple(pool.values()),
         )
         current = min((current, improved, refreshed), key=lambda solution: solution.objective)
@@ -52,6 +55,7 @@ def solve_hybrid(
             "rounds_completed": rounds,
             "seed": seed,
             "iterations_per_round": iterations,
+            "candidate_time_limit_s": time_limit_s,
             "final_candidate_count": len(pool),
             "objective_history": objective_history,
         }

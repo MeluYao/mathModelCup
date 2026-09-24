@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 from ortools.sat.python import cp_model
 
 from .problem_d_q2 import (
+    BatteryUnit,
     DeliveryRecord,
     InfeasibleQ2Error,
     Q2Data,
@@ -137,6 +138,100 @@ def schedule_trips_greedy(
         executions,
         perf_counter() - started,
         "FEASIBLE",
+    )
+
+
+def construct_resource_aware_boxwise_solution(
+    data: Q2Data,
+    candidates: Sequence[TripPlan],
+    method: str,
+) -> Q2Solution:
+    """Build an independent feasible incumbent from single-box alternatives."""
+    started = perf_counter()
+    alternatives: Dict[str, List[TripPlan]] = {box_id: [] for box_id in data.boxes}
+    for candidate in candidates:
+        if len(candidate.box_ids) == 1:
+            alternatives[candidate.box_ids[0]].append(candidate)
+    if any(not plans for plans in alternatives.values()):
+        raise InfeasibleQ2Error("boxwise construction lacks a candidate for some box")
+
+    aircraft_available = {unit.aircraft_id: 0.0 for unit in data.aircraft_units}
+    battery_available = {battery.battery_id: 0.0 for battery in data.batteries}
+    battery_by_id: Dict[str, BatteryUnit] = {
+        battery.battery_id: battery for battery in data.batteries
+    }
+    ordered_box_ids = sorted(
+        data.boxes,
+        key=lambda box_id: (
+            data.boxes[box_id].hard_deadline_s
+            if data.boxes[box_id].hard_deadline_s is not None
+            else inf,
+            data.boxes[box_id].expected_time_s,
+            -data.boxes[box_id].priority_weight,
+            box_id,
+        ),
+    )
+    executions: List[TripExecution] = []
+    for index, box_id in enumerate(ordered_box_ids, start=1):
+        choices = []
+        box = data.boxes[box_id]
+        for plan in alternatives[box_id]:
+            for unit in data.aircraft_units:
+                if unit.model_id != plan.model_id:
+                    continue
+                for battery in data.batteries:
+                    if battery.model_id != plan.model_id:
+                        continue
+                    start_time = max(
+                        aircraft_available[unit.aircraft_id],
+                        battery_available[battery.battery_id],
+                    )
+                    delivery_time = start_time + plan.delivery_offsets_s[box_id]
+                    if (
+                        box.hard_deadline_s is not None
+                        and delivery_time > box.hard_deadline_s + 1e-9
+                    ):
+                        continue
+                    choices.append(
+                        (
+                            delivery_time,
+                            start_time + plan.duration_s,
+                            plan.energy_kwh,
+                            start_time,
+                            unit.aircraft_id,
+                            battery.battery_id,
+                            plan,
+                        )
+                    )
+        if not choices:
+            raise InfeasibleQ2Error(
+                f"boxwise construction misses hard deadline for {box_id}"
+            )
+        _, return_time, _, start_time, aircraft_id, battery_id, plan = min(choices)
+        battery_ready = return_time + charge_time_s(
+            plan.return_soc_percent / 100.0,
+            battery_by_id[battery_id].full_charge_time_s,
+        )
+        aircraft_available[aircraft_id] = return_time
+        battery_available[battery_id] = battery_ready
+        executions.append(
+            TripExecution(
+                trip_id=f"T{index:03d}",
+                plan=plan,
+                aircraft_id=aircraft_id,
+                battery_id=battery_id,
+                start_time_s=start_time,
+                return_time_s=return_time,
+                battery_ready_time_s=battery_ready,
+            )
+        )
+    return _make_solution(
+        data,
+        method,
+        executions,
+        perf_counter() - started,
+        "FEASIBLE",
+        diagnostics={"initialization": "independent_resource_aware"},
     )
 
 

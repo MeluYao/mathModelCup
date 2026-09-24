@@ -13,18 +13,19 @@ from scipy.sparse import csc_matrix, vstack
 
 from .problem_d_q1 import load_problem_data, solve_dynamic_programming
 from .problem_d_q2 import (
-    BatteryUnit,
     InfeasibleQ2Error,
     Q2Data,
     Q2Solution,
     TripDraft,
-    TripExecution,
     TripPlan,
     TripStop,
 )
 from .problem_d_q2_geometry import ArcGeometry
-from .problem_d_q2_physics import charge_time_s, evaluate_trip
-from .problem_d_q2_schedule import _make_solution, schedule_trips_cp_sat
+from .problem_d_q2_physics import evaluate_trip
+from .problem_d_q2_schedule import (
+    construct_resource_aware_boxwise_solution,
+    schedule_trips_cp_sat,
+)
 
 
 def _try_plan(
@@ -36,6 +37,39 @@ def _try_plan(
         return evaluate_trip(data, arcs, draft)
     except InfeasibleQ2Error:
         return None
+
+
+def _service_distance(
+    arcs: Mapping[Tuple[str, str], ArcGeometry],
+    left_service_id: str,
+    right_service_id: str,
+) -> float:
+    arc = arcs.get((left_service_id, right_service_id))
+    return arc.distance_m if arc is not None else inf
+
+
+def _insert_box_stops(
+    stops: Tuple[TripStop, ...],
+    service_id: str,
+    box_id: str,
+    max_stops: int,
+) -> Tuple[Tuple[TripStop, ...], ...]:
+    existing = next(
+        (index for index, stop in enumerate(stops) if stop.service_id == service_id),
+        None,
+    )
+    if existing is not None:
+        updated = list(stops)
+        stop = updated[existing]
+        updated[existing] = TripStop(service_id, stop.box_ids + (box_id,))
+        return (tuple(updated),)
+    if len(stops) >= max_stops:
+        return ()
+    new_stop = TripStop(service_id, (box_id,))
+    return tuple(
+        stops[:position] + (new_stop,) + stops[position:]
+        for position in range(len(stops) + 1)
+    )
 
 
 def _q1_seed_plans(
@@ -65,7 +99,7 @@ def _q1_seed_plans(
 def generate_initial_candidates(
     data: Q2Data,
     arcs: Mapping[Tuple[str, str], ArcGeometry],
-    max_stops: int = 3,
+    max_stops: int = 4,
 ) -> Tuple[TripPlan, ...]:
     """Build a compact, guaranteed-covering initial trip pool."""
     if max_stops < 1:
@@ -85,20 +119,85 @@ def generate_initial_candidates(
     seed_plans = _q1_seed_plans(data, arcs)
     candidates.extend(seed_plans)
 
+    frontier: List[TripPlan] = []
     if max_stops >= 2:
-        for left_index, left in enumerate(seed_plans):
-            for right in seed_plans[left_index + 1 :]:
-                if left.model_id != right.model_id:
+        box_ids = tuple(sorted(data.boxes))
+        pair_keys = set()
+        for left_id in box_ids:
+            left = data.boxes[left_id]
+            neighbors = sorted(
+                (right_id for right_id in box_ids if right_id != left_id),
+                key=lambda right_id: (
+                    _service_distance(
+                        arcs, left.service_id, data.boxes[right_id].service_id
+                    ),
+                    right_id,
+                ),
+            )[:10]
+            for right_id in neighbors:
+                pair_key = tuple(sorted((left_id, right_id)))
+                if pair_key in pair_keys:
                     continue
-                if left.stops[0].service_id == right.stops[0].service_id:
-                    continue
-                for stops in (
-                    (left.stops[0], right.stops[0]),
-                    (right.stops[0], left.stops[0]),
+                pair_keys.add(pair_key)
+                right = data.boxes[right_id]
+                for model_id in sorted(data.aircraft_models):
+                    if left.service_id == right.service_id:
+                        stop_orders = (
+                            (TripStop(left.service_id, pair_key),),
+                        )
+                    else:
+                        stop_orders = (
+                            (
+                                TripStop(left.service_id, (left_id,)),
+                                TripStop(right.service_id, (right_id,)),
+                            ),
+                            (
+                                TripStop(right.service_id, (right_id,)),
+                                TripStop(left.service_id, (left_id,)),
+                            ),
+                        )
+                    for stops in stop_orders:
+                        plan = _try_plan(data, arcs, TripDraft(model_id, stops))
+                        if plan is not None:
+                            frontier.append(plan)
+        frontier = list(prune_dominated_candidates(frontier))
+        candidates.extend(frontier)
+
+    for box_count in range(3, max_stops + 1):
+        expanded: List[TripPlan] = []
+        for base in frontier:
+            used_boxes = set(base.box_ids)
+            extensions = sorted(
+                (box_id for box_id in data.boxes if box_id not in used_boxes),
+                key=lambda box_id: (
+                    min(
+                        _service_distance(
+                            arcs, stop.service_id, data.boxes[box_id].service_id
+                        )
+                        for stop in base.stops
+                    ),
+                    box_id,
+                ),
+            )[:5]
+            for box_id in extensions:
+                box = data.boxes[box_id]
+                for stops in _insert_box_stops(
+                    base.stops, box.service_id, box_id, max_stops
                 ):
-                    plan = _try_plan(data, arcs, TripDraft(left.model_id, stops))
+                    plan = _try_plan(data, arcs, TripDraft(base.model_id, stops))
                     if plan is not None:
-                        candidates.append(plan)
+                        expanded.append(plan)
+        frontier = list(prune_dominated_candidates(expanded))
+        if len(frontier) > 1_000:
+            frontier = sorted(
+                frontier,
+                key=lambda plan: (
+                    _candidate_cost(data, plan),
+                    plan.duration_s,
+                    plan.signature,
+                ),
+            )[:1_000]
+        candidates.extend(frontier)
 
     return prune_dominated_candidates(candidates)
 
@@ -209,96 +308,21 @@ def _select_candidates(
     return tuple(candidates[index] for index in selected_indices), (result, selected_indices)
 
 
-def _resource_aware_single_box_fallback(
+def _resource_aware_incumbent(
     data: Q2Data,
     candidates: Sequence[TripPlan],
     *,
     started: float,
-    failure_reason: str,
+    diagnostics: Mapping[str, object] | None = None,
 ) -> Q2Solution:
-    alternatives: Dict[str, List[TripPlan]] = {box_id: [] for box_id in data.boxes}
-    for candidate in candidates:
-        if len(candidate.box_ids) == 1:
-            alternatives[candidate.box_ids[0]].append(candidate)
-    if any(not plans for plans in alternatives.values()):
-        raise InfeasibleQ2Error("single-box fallback lacks a candidate for some box")
-
-    aircraft_available = {unit.aircraft_id: 0.0 for unit in data.aircraft_units}
-    battery_available = {battery.battery_id: 0.0 for battery in data.batteries}
-    battery_by_id: Dict[str, BatteryUnit] = {
-        battery.battery_id: battery for battery in data.batteries
-    }
-    ordered_box_ids = sorted(
-        data.boxes,
-        key=lambda box_id: (
-            data.boxes[box_id].hard_deadline_s
-            if data.boxes[box_id].hard_deadline_s is not None
-            else inf,
-            data.boxes[box_id].expected_time_s,
-            -data.boxes[box_id].priority_weight,
-            box_id,
-        ),
-    )
-    executions = []
-    for index, box_id in enumerate(ordered_box_ids, start=1):
-        choices = []
-        box = data.boxes[box_id]
-        for plan in alternatives[box_id]:
-            for unit in data.aircraft_units:
-                if unit.model_id != plan.model_id:
-                    continue
-                for battery in data.batteries:
-                    if battery.model_id != plan.model_id:
-                        continue
-                    start_time = max(
-                        aircraft_available[unit.aircraft_id],
-                        battery_available[battery.battery_id],
-                    )
-                    delivery_time = start_time + plan.delivery_offsets_s[box_id]
-                    if box.hard_deadline_s is not None and delivery_time > box.hard_deadline_s + 1e-9:
-                        continue
-                    choices.append(
-                        (
-                            delivery_time,
-                            start_time + plan.duration_s,
-                            plan.energy_kwh,
-                            start_time,
-                            unit.aircraft_id,
-                            battery.battery_id,
-                            plan,
-                        )
-                    )
-        if not choices:
-            raise InfeasibleQ2Error(f"single-box fallback misses hard deadline for {box_id}")
-        _, return_time, _, start_time, aircraft_id, battery_id, plan = min(choices)
-        battery_ready = return_time + charge_time_s(
-            plan.return_soc_percent / 100.0,
-            battery_by_id[battery_id].full_charge_time_s,
-        )
-        aircraft_available[aircraft_id] = return_time
-        battery_available[battery_id] = battery_ready
-        executions.append(
-            TripExecution(
-                trip_id=f"T{index:03d}",
-                plan=plan,
-                aircraft_id=aircraft_id,
-                battery_id=battery_id,
-                start_time_s=start_time,
-                return_time_s=return_time,
-                battery_ready_time_s=battery_ready,
-            )
-        )
-    return _make_solution(
-        data,
-        "candidate",
-        executions,
-        perf_counter() - started,
-        "FEASIBLE_FALLBACK",
-        diagnostics={
-            "candidate_count": len(candidates),
-            "fallback": "resource_aware_single_box",
-            "fallback_reason": failure_reason,
-        },
+    incumbent = construct_resource_aware_boxwise_solution(data, candidates, "candidate")
+    merged_diagnostics = dict(incumbent.diagnostics)
+    merged_diagnostics.update({"candidate_count": len(candidates)})
+    merged_diagnostics.update(diagnostics or {})
+    return replace(
+        incumbent,
+        runtime_s=perf_counter() - started,
+        diagnostics=merged_diagnostics,
     )
 
 
@@ -313,6 +337,7 @@ def solve_candidate_method(
     pool = tuple(candidates) if candidates is not None else generate_initial_candidates(data, arcs)
     if not pool:
         raise InfeasibleQ2Error("candidate pool is empty")
+    incumbent = _resource_aware_incumbent(data, pool, started=started)
     cuts: List[Tuple[int, ...]] = []
     last_error = ""
     for iteration in range(10):
@@ -341,14 +366,33 @@ def solve_candidate_method(
                 "no_good_cut_count": len(cuts),
             }
         )
-        return replace(
+        exact = replace(
             scheduled,
             runtime_s=perf_counter() - started,
             diagnostics=diagnostics,
         )
-    return _resource_aware_single_box_fallback(
+        if exact.objective < incumbent.objective:
+            return exact
+        return _resource_aware_incumbent(
+            data,
+            pool,
+            started=started,
+            diagnostics={
+                "selected_candidate_count": len(selected),
+                "set_partition_status": int(result.status),
+                "set_partition_message": result.message,
+                "set_partition_objective": float(result.fun),
+                "no_good_cut_count": len(cuts),
+                "incumbent_source": "resource_aware_bootstrap",
+            },
+        )
+    return _resource_aware_incumbent(
         data,
         pool,
         started=started,
-        failure_reason=f"candidate scheduling failed after 10 cuts: {last_error}",
+        diagnostics={
+            "no_good_cut_count": len(cuts),
+            "incumbent_source": "resource_aware_bootstrap",
+            "exact_search_failure": last_error,
+        },
     )

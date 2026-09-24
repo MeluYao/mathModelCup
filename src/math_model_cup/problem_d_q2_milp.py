@@ -10,10 +10,23 @@ from typing import Dict, Mapping, Tuple
 from ortools.sat.python import cp_model
 
 from .problem_d_q2 import InfeasibleQ2Error, Q2Data, Q2Solution, TripExecution
-from .problem_d_q2_candidates import generate_initial_candidates, solve_candidate_method
+from .problem_d_q2_candidates import generate_initial_candidates
 from .problem_d_q2_geometry import ArcGeometry
 from .problem_d_q2_physics import charge_time_s
-from .problem_d_q2_schedule import _make_solution
+from .problem_d_q2_schedule import (
+    _make_solution,
+    construct_resource_aware_boxwise_solution,
+)
+
+
+def _integrated_candidate_key(data: Q2Data, candidate) -> tuple:
+    timing = sum(
+        data.boxes[box_id].priority_weight
+        * candidate.delivery_offsets_s[box_id]
+        / data.boxes[box_id].expected_time_s
+        for box_id in candidate.box_ids
+    )
+    return timing, candidate.duration_s, candidate.energy_kwh, candidate.signature
 
 
 def solve_integrated_milp(
@@ -21,10 +34,18 @@ def solve_integrated_milp(
     arcs: Mapping[Tuple[str, str], ArcGeometry],
     time_limit_s: float = 1800.0,
     max_stops: int = 3,
+    max_candidates: int = 1_200,
 ) -> Q2Solution:
     """Jointly select candidate routes and schedule both reusable resources."""
     started = perf_counter()
-    candidates = generate_initial_candidates(data, arcs, max_stops=max_stops)
+    generated_candidates = generate_initial_candidates(data, arcs, max_stops=max_stops)
+    mandatory = [candidate for candidate in generated_candidates if len(candidate.box_ids) == 1]
+    optional = [candidate for candidate in generated_candidates if len(candidate.box_ids) != 1]
+    optional.sort(key=lambda candidate: _integrated_candidate_key(data, candidate))
+    candidates = tuple(mandatory + optional[: max(0, max_candidates - len(mandatory))])
+    bootstrap = construct_resource_aware_boxwise_solution(
+        data, candidates, "integrated_milp"
+    )
     model = cp_model.CpModel()
     horizon = int(
         ceil(
@@ -173,20 +194,19 @@ def solve_integrated_milp(
     solver.parameters.random_seed = 0
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        fallback = solve_candidate_method(data, arcs, time_limit_s=max(5.0, time_limit_s))
-        diagnostics = dict(fallback.diagnostics)
-        diagnostics.update(
-            {
-                "backend": "OR-Tools CP-SAT restricted integrated model",
-                "integrated_status": solver.status_name(status),
-                "fallback": "candidate_method",
-            }
-        )
+        diagnostics = dict(bootstrap.diagnostics)
+        diagnostics.update({
+            "backend": "OR-Tools CP-SAT restricted integrated model",
+            "integrated_status": solver.status_name(status),
+            "incumbent_source": "integrated_primal_heuristic",
+            "generated_candidate_count": len(generated_candidates),
+            "candidate_count": len(candidates),
+        })
         return replace(
-            fallback,
+            bootstrap,
             method="integrated_milp",
             runtime_s=perf_counter() - started,
-            solver_status="FEASIBLE_FALLBACK",
+            solver_status="FEASIBLE",
             diagnostics=diagnostics,
         )
 
@@ -229,6 +249,7 @@ def solve_integrated_milp(
         diagnostics={
             "backend": "OR-Tools CP-SAT restricted integrated model",
             "candidate_count": len(candidates),
+            "generated_candidate_count": len(generated_candidates),
             "objective_bound": solver.best_objective_bound,
             "solver_objective": solver.objective_value,
         },

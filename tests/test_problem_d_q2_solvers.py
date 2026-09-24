@@ -18,6 +18,8 @@ def test_integrated_milp_returns_valid_solution(schedule_case) -> None:
     assert validate_q2_solution(data, arcs, solution).is_valid
     assert solution.method == "integrated_milp"
     assert "backend" in solution.diagnostics
+    assert solution.solver_status in {"FEASIBLE", "OPTIMAL"}
+    assert not solution.diagnostics.get("fallback")
 
 
 def test_alns_is_reproducible_and_valid(schedule_case) -> None:
@@ -29,6 +31,9 @@ def test_alns_is_reproducible_and_valid(schedule_case) -> None:
     assert first.objective == pytest.approx(second.objective)
     assert validate_q2_solution(data, arcs, first).is_valid
     assert first.method == "alns"
+    assert first.solver_status in {"FEASIBLE", "OPTIMAL"}
+    assert not first.diagnostics.get("fallback")
+    assert first.diagnostics["initialization"] == "independent_resource_aware"
 
 
 def test_hybrid_returns_valid_solution_and_records_rounds(schedule_case) -> None:
@@ -39,3 +44,5 @@ def test_hybrid_returns_valid_solution_and_records_rounds(schedule_case) -> None
     assert validate_q2_solution(data, arcs, solution).is_valid
     assert solution.method == "hybrid"
     assert solution.diagnostics["rounds_completed"] == 2
+    assert solution.solver_status in {"FEASIBLE", "OPTIMAL"}
+    assert not solution.diagnostics.get("fallback")
