@@ -8,6 +8,7 @@ dependencies:
   - openpyxl
   - pillow
   - scipy
+  - ortools
   - scikit-learn
   - matplotlib
   - seaborn
