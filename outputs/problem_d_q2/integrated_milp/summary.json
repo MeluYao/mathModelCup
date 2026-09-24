@@ -1,0 +1,30 @@
+{
+  "method": "integrated_milp",
+  "solver_status": "FEASIBLE",
+  "validation": "PASS",
+  "runtime_s": 5.5597834,
+  "objective": {
+    "normalized_weighted_delivery_time": 1.7068739241147075,
+    "makespan_s": 37939.8995020773,
+    "energy_kwh": 174.0327124030489,
+    "trip_count": 76
+  },
+  "constraint_check": {
+    "validation": "PASS",
+    "required_box_count": 80,
+    "delivered_box_count": 80,
+    "missing_box_count": 0,
+    "duplicate_box_count": 0,
+    "hard_deadline_violation_count": 0,
+    "aircraft_overlap_count": 0,
+    "battery_overlap_count": 0,
+    "energy_violation_count": 0,
+    "minimum_return_soc_percent": 32.011234859728454
+  },
+  "diagnostics": {
+    "backend": "OR-Tools CP-SAT restricted integrated model",
+    "candidate_count": 258,
+    "objective_bound": 1754949380150.0,
+    "solver_objective": 16164580140426.0
+  }
+}

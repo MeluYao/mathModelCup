@@ -1,0 +1,50 @@
+{
+  "method": "hybrid",
+  "solver_status": "FEASIBLE",
+  "validation": "PASS",
+  "runtime_s": 16.928792199999997,
+  "objective": {
+    "normalized_weighted_delivery_time": 1.0945607061728408,
+    "makespan_s": 18824.583381460106,
+    "energy_kwh": 191.66702883602272,
+    "trip_count": 80
+  },
+  "constraint_check": {
+    "validation": "PASS",
+    "required_box_count": 80,
+    "delivered_box_count": 80,
+    "missing_box_count": 0,
+    "duplicate_box_count": 0,
+    "hard_deadline_violation_count": 0,
+    "aircraft_overlap_count": 0,
+    "battery_overlap_count": 0,
+    "energy_violation_count": 0,
+    "minimum_return_soc_percent": 30.14782029412183
+  },
+  "diagnostics": {
+    "initialization": "independent_resource_aware",
+    "candidate_count": 5244,
+    "no_good_cut_count": 10,
+    "incumbent_source": "resource_aware_bootstrap",
+    "exact_search_failure": "CP-SAT could not find a feasible resource schedule",
+    "rounds_completed": 1,
+    "seed": 20260924,
+    "iterations_per_round": 10,
+    "candidate_time_limit_s": 5.0,
+    "final_candidate_count": 5244,
+    "objective_history": [
+      [
+        1.0945607061728408,
+        18824.583381460106,
+        191.66702883602272,
+        80
+      ],
+      [
+        1.0945607061728408,
+        18824.583381460106,
+        191.66702883602272,
+        80
+      ]
+    ]
+  }
+}

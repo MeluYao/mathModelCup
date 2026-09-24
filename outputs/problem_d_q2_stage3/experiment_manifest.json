@@ -1,0 +1,42 @@
+{
+  "problem_dir": "D:\\MProject\\mathModelCup\\D题",
+  "output_dir": "C:\\Users\\Yao Baoxian\\.codex\\worktrees\\d2-four-solvers-mvp\\mathModelCup\\outputs\\problem_d_q2_stage3",
+  "methods": [
+    "integrated_milp",
+    "candidate",
+    "alns",
+    "hybrid"
+  ],
+  "seeds": [
+    20260924,
+    20260925,
+    20260926,
+    20260927,
+    20260928,
+    20260929,
+    20260930,
+    20260931,
+    20260932,
+    20260933
+  ],
+  "alns_iterations": 20,
+  "quick": true,
+  "time_limit_s": 5.0,
+  "candidate_count": 4244,
+  "figure_files": [
+    "figures\\fig01_method_objectives.png",
+    "figures\\fig01_method_objectives.pdf",
+    "figures\\fig02_method_runtime.png",
+    "figures\\fig02_method_runtime.pdf",
+    "figures\\fig03_resource_gantt.png",
+    "figures\\fig03_resource_gantt.pdf",
+    "figures\\fig04_alns_multiseed.png",
+    "figures\\fig04_alns_multiseed.pdf",
+    "figures\\fig05_sensitivity.png",
+    "figures\\fig05_sensitivity.pdf",
+    "figures\\fig06_alns_convergence.png",
+    "figures\\fig06_alns_convergence.pdf",
+    "figures\\fig07_route_map.png",
+    "figures\\fig07_route_map.pdf"
+  ]
+}

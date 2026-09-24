@@ -1,0 +1,2 @@
+﻿validation,required_box_count,delivered_box_count,missing_box_count,duplicate_box_count,hard_deadline_violation_count,aircraft_overlap_count,battery_overlap_count,energy_violation_count,minimum_return_soc_percent
+PASS,80,80,0,0,0,0,0,0,30.14782029412183

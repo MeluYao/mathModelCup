@@ -36,6 +36,7 @@ def test_reporting_writes_submission_source_tables(tmp_path, schedule_case) -> N
     assert (tmp_path / "method_comparison.csv").exists()
     assert (tmp_path / "summary.md").exists()
     assert (tmp_path / "five_step_comparison.md").exists()
+    assert b"\r\r\n" not in (tmp_path / "summary.md").read_bytes()
 
     comparison = pd.read_csv(tmp_path / "method_comparison.csv")
     assert comparison.loc[0, "validation"] == "PASS"

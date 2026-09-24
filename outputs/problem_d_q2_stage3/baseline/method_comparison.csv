@@ -1,0 +1,5 @@
+﻿method,validation,solver_status,normalized_weighted_delivery_time,makespan_s,energy_kwh,trip_count,runtime_s,delivered_box_count,minimum_return_soc_percent,fallback,backend,own_incumbent,pareto_nondominated,lexicographic_rank
+integrated_milp,PASS,FEASIBLE,1.0945607061728408,18824.583381460106,191.66702883602272,80,11.739407,80,30.14782029412183,,OR-Tools CP-SAT restricted integrated model,True,True,3
+candidate,PASS,FEASIBLE,1.0945607061728408,18824.583381460106,191.66702883602272,80,9.463737300000002,80,30.14782029412183,,,True,True,1
+alns,PASS,FEASIBLE,1.0945607061728408,18824.583381460106,191.66702883602272,80,11.6731299,80,30.14782029412183,,,True,True,2
+hybrid,PASS,FEASIBLE,1.0945607061728408,18824.583381460106,191.66702883602272,80,16.928792199999997,80,30.14782029412183,,,True,True,4

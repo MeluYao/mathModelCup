@@ -10,4 +10,4 @@ conda run -n math-model-cup python scripts/run_example.py
 conda run -n math-model-cup pytest
 ```
 
-赛题资料、原始数据和实验输出不纳入 Git。稳定的通用逻辑应从 Notebook 迁移到 `src/math_model_cup/`。
+赛题资料和原始数据不纳入 Git；需要交付的实验输出可纳入 `outputs/`。稳定的通用逻辑应从 Notebook 迁移到 `src/math_model_cup/`。

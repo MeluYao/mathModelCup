@@ -228,7 +228,7 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
     try:
         table = display.to_markdown(index=False)
     except ImportError:
-        table = display.to_csv(index=False)
+        table = display.to_csv(index=False, lineterminator="\n")
     return "\n".join(
         [
             "# D题第二问四方案比较摘要",

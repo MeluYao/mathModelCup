@@ -1,0 +1,36 @@
+{
+  "method": "alns",
+  "solver_status": "FEASIBLE_FALLBACK",
+  "validation": "PASS",
+  "runtime_s": 1.4021706999999992,
+  "objective": {
+    "normalized_weighted_delivery_time": 1.0945607061728408,
+    "makespan_s": 18824.583381460106,
+    "energy_kwh": 191.66702883602272,
+    "trip_count": 80
+  },
+  "constraint_check": {
+    "validation": "PASS",
+    "required_box_count": 80,
+    "delivered_box_count": 80,
+    "missing_box_count": 0,
+    "duplicate_box_count": 0,
+    "hard_deadline_violation_count": 0,
+    "aircraft_overlap_count": 0,
+    "battery_overlap_count": 0,
+    "energy_violation_count": 0,
+    "minimum_return_soc_percent": 30.14782029412183
+  },
+  "diagnostics": {
+    "candidate_count": 258,
+    "fallback": "resource_aware_single_box",
+    "fallback_reason": "candidate scheduling failed after 10 cuts: CP-SAT could not find a feasible resource schedule",
+    "seed": 20260924,
+    "iterations_requested": 100,
+    "merge_attempts": 34,
+    "accepted_moves": 0,
+    "operator_weights": {
+      "pair_merge": 1.0
+    }
+  }
+}
