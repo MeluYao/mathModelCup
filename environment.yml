@@ -5,6 +5,8 @@ dependencies:
   - python=3.11
   - numpy
   - pandas
+  - openpyxl
+  - pillow
   - scipy
   - scikit-learn
   - matplotlib
