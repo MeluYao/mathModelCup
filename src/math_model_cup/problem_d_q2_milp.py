@@ -169,7 +169,8 @@ def solve_integrated_milp(
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_s)
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         fallback = solve_candidate_method(data, arcs, time_limit_s=max(5.0, time_limit_s))

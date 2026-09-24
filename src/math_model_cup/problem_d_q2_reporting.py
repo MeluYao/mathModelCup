@@ -163,11 +163,20 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
         objectives = {method: solutions[method].objective for method in valid["method"]}
         best_objective = min(objectives.values())
         best_methods = [method for method, value in objectives.items() if value == best_objective]
-        recommendation = (
-            "按统一词典序目标，当前推荐："
-            + "、".join(best_methods)
-            + "。若目标并列，应优先选择无回退、运行时间更短且可解释性更强的方案。"
-        )
+        best_rows = valid[valid["method"].isin(best_methods)]
+        own_incumbents = best_rows[best_rows["fallback"].fillna("") == ""]
+        if own_incumbents.empty:
+            fastest = best_rows.sort_values("runtime_s").iloc[0]["method"]
+            recommendation = (
+                "当前最佳目标对应的入口均来自回退解，尚不能据此判定四种算法的寻优优劣。"
+                f"若只考虑阶段一保底运行时间，{fastest} 最短；正式推荐需等待阶段二独立解。"
+            )
+        else:
+            recommendation = (
+                "按统一词典序目标，当前推荐："
+                + "、".join(own_incumbents["method"])
+                + "。目标并列时优先选择无回退、运行时间更短且可解释性更强的方案。"
+            )
     display = comparison[
         [
             "method",

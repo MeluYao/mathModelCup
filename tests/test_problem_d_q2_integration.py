@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pandas as pd
+import pytest
 
+from math_model_cup.problem_d_q2 import load_q2_data
 from math_model_cup.problem_d_q2_candidates import solve_candidate_method
-from math_model_cup.problem_d_q2_reporting import write_q2_outputs
+from math_model_cup.problem_d_q2_geometry import build_arc_matrix
+from math_model_cup.problem_d_q2_reporting import run_methods, write_q2_outputs
+from math_model_cup.problem_d_q2_validation import validate_q2_solution
 
 from test_problem_d_q2_schedule import schedule_case
 
@@ -36,3 +42,28 @@ def test_reporting_writes_submission_source_tables(tmp_path, schedule_case) -> N
     summary = json.loads((method_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["validation"] == "PASS"
     assert summary["objective"]["trip_count"] == len(solution.trips)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("D_PROBLEM_DIR"), reason="D_PROBLEM_DIR is not configured"
+)
+def test_real_data_all_four_methods_return_valid_solutions(tmp_path) -> None:
+    problem_dir = Path(os.environ["D_PROBLEM_DIR"])
+    data = load_q2_data(problem_dir)
+    arcs = build_arc_matrix(data)
+
+    solutions = run_methods(
+        problem_dir,
+        tmp_path / "real_outputs",
+        methods=("integrated_milp", "candidate", "alns", "hybrid"),
+        seed=20260924,
+        quick=True,
+        time_limit_s=5,
+    )
+
+    assert set(solutions) == {"integrated_milp", "candidate", "alns", "hybrid"}
+    assert len(data.boxes) == 80
+    assert all(
+        validate_q2_solution(data, arcs, solution).is_valid
+        for solution in solutions.values()
+    )
