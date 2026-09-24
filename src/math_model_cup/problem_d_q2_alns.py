@@ -230,11 +230,16 @@ def solve_alns(
     *,
     initial_solution: Q2Solution | None = None,
     max_stops: int = 3,
+    candidate_pool: Sequence[TripPlan] | None = None,
 ) -> Q2Solution:
     """Run destroy/repair ALNS with deterministic resource decoding."""
     started = perf_counter()
     rng = Random(seed)
-    initial_candidates = generate_initial_candidates(data, arcs, max_stops=max_stops)
+    initial_candidates = (
+        tuple(candidate_pool)
+        if candidate_pool is not None
+        else generate_initial_candidates(data, arcs, max_stops=max_stops)
+    )
     single_plans: Dict[str, list[TripPlan]] = {box_id: [] for box_id in data.boxes}
     for plan in initial_candidates:
         if len(plan.box_ids) == 1:
@@ -331,6 +336,9 @@ def solve_alns(
             current = best
             no_improvement = 0
             restarts += 1
+
+    if iterations > 0 and history[-1][0] != iterations:
+        history.append((iterations, best.objective))
 
     diagnostics = dict(best.diagnostics)
     diagnostics.pop("fallback", None)

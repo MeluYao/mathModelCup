@@ -37,6 +37,7 @@ def solve_hybrid(
             seed=seed + round_index,
             iterations=iterations,
             initial_solution=current,
+            candidate_pool=tuple(pool.values()),
         )
         for trip in improved.trips:
             pool[trip.plan.signature] = trip.plan
