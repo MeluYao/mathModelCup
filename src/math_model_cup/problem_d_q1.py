@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import product
-from math import asin, cos, inf, radians, sin, sqrt
+from math import asin, cos, floor, inf, radians, sin, sqrt
 from pathlib import Path
 from time import perf_counter
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
@@ -23,6 +23,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from PIL import Image
+from pyproj import Geod
 from scipy.optimize import Bounds, LinearConstraint, milp
 
 
@@ -69,6 +70,40 @@ class ServiceGeometry:
     cruise_altitude_m: float
     center_climb_m: float
     service_climb_m: float
+    haversine_distance_m: float = 0.0
+    peak_row: int = -1
+    peak_column: int = -1
+    peak_longitude: float = float("nan")
+    peak_latitude: float = float("nan")
+    service_longitude: float = float("nan")
+    service_latitude: float = float("nan")
+    service_ground_m: float = float("nan")
+
+    @property
+    def outbound_descent_m(self) -> float:
+        return self.service_climb_m
+
+    @property
+    def return_climb_m(self) -> float:
+        return self.service_climb_m
+
+    @property
+    def return_descent_m(self) -> float:
+        return self.center_climb_m
+
+
+@dataclass(frozen=True)
+class GeoTiffMetadata:
+    path: Path
+    columns: int
+    rows: int
+    epsg: int
+    crs_name: str
+    pixel_width_degrees: float
+    pixel_height_degrees: float
+    nodata: float | None
+    affine: Tuple[float, float, float, float, float, float]
+    bounds: Tuple[float, float, float, float]
 
 
 @dataclass(frozen=True)
@@ -77,6 +112,10 @@ class ProblemData:
     boxes: Tuple[Box, ...]
     geometries: Mapping[str, ServiceGeometry]
     material_types: Tuple[str, ...]
+    dem_metadata: GeoTiffMetadata | None = None
+    center_longitude: float = float("nan")
+    center_latitude: float = float("nan")
+    center_elevation_m: float = float("nan")
 
 
 @dataclass(frozen=True)
@@ -93,6 +132,31 @@ class CandidateTrip:
     @property
     def box_count(self) -> int:
         return sum(self.counts)
+
+
+@dataclass(frozen=True)
+class EnergyBreakdown:
+    outbound_payload_kg: float
+    return_payload_kg: float
+    outbound_equivalent_range_m: float
+    return_equivalent_range_m: float
+    outbound_horizontal_kwh: float
+    return_horizontal_kwh: float
+    outbound_climb_kwh: float
+    return_climb_kwh: float
+    descent_energy_kwh: float
+
+    @property
+    def horizontal_kwh(self) -> float:
+        return self.outbound_horizontal_kwh + self.return_horizontal_kwh
+
+    @property
+    def climb_kwh(self) -> float:
+        return self.outbound_climb_kwh + self.return_climb_kwh
+
+    @property
+    def total_kwh(self) -> float:
+        return self.horizontal_kwh + self.climb_kwh + self.descent_energy_kwh
 
 
 @dataclass(frozen=True)
@@ -147,8 +211,18 @@ def equivalent_range(aircraft: Aircraft, payload_kg: float) -> float:
     ) * load_fraction**1.5
 
 
-def _horizontal_energy(aircraft: Aircraft, distance_m: float, payload_kg: float) -> float:
-    return aircraft.usable_energy_kwh * distance_m / equivalent_range(aircraft, payload_kg)
+def _horizontal_energy(
+    aircraft: Aircraft,
+    distance_m: float,
+    payload_kg: float,
+    range_energy_fraction: float = 1.0,
+) -> float:
+    return (
+        range_energy_fraction
+        * aircraft.usable_energy_kwh
+        * distance_m
+        / equivalent_range(aircraft, payload_kg)
+    )
 
 
 def _climb_energy(aircraft: Aircraft, climb_m: float, payload_kg: float) -> float:
@@ -160,15 +234,56 @@ def _climb_energy(aircraft: Aircraft, climb_m: float, payload_kg: float) -> floa
     )
 
 
-def trip_energy(aircraft: Aircraft, geometry: ServiceGeometry, payload_kg: float) -> float:
+def trip_energy_breakdown(
+    aircraft: Aircraft,
+    geometry: ServiceGeometry,
+    payload_kg: float,
+    *,
+    range_energy_fraction: float = 1.0,
+) -> EnergyBreakdown:
+    """Return a dimensionally explicit round-trip energy decomposition.
+
+    ``range_energy_fraction=1`` means the tabulated standard range consumes the
+    full usable battery energy.  A value of 0.8 represents the alternative
+    interpretation that the published range already preserves a 20% reserve.
+    """
+    if not 0.0 < range_energy_fraction <= 1.0:
+        raise ValueError("range_energy_fraction must be in (0, 1]")
+    return EnergyBreakdown(
+        outbound_payload_kg=payload_kg,
+        return_payload_kg=0.0,
+        outbound_equivalent_range_m=equivalent_range(aircraft, payload_kg),
+        return_equivalent_range_m=equivalent_range(aircraft, 0.0),
+        outbound_horizontal_kwh=_horizontal_energy(
+            aircraft, geometry.distance_m, payload_kg, range_energy_fraction
+        ),
+        return_horizontal_kwh=_horizontal_energy(
+            aircraft, geometry.distance_m, 0.0, range_energy_fraction
+        ),
+        outbound_climb_kwh=_climb_energy(
+            aircraft, geometry.center_climb_m, payload_kg
+        ),
+        return_climb_kwh=_climb_energy(
+            aircraft, geometry.return_climb_m, 0.0
+        ),
+        descent_energy_kwh=0.0,
+    )
+
+
+def trip_energy(
+    aircraft: Aircraft,
+    geometry: ServiceGeometry,
+    payload_kg: float,
+    *,
+    range_energy_fraction: float = 1.0,
+) -> float:
     """Return round-trip energy with loaded outbound and empty return legs."""
-    outbound = _horizontal_energy(aircraft, geometry.distance_m, payload_kg) + _climb_energy(
-        aircraft, geometry.center_climb_m, payload_kg
-    )
-    inbound = _horizontal_energy(aircraft, geometry.distance_m, 0.0) + _climb_energy(
-        aircraft, geometry.service_climb_m, 0.0
-    )
-    return outbound + inbound
+    return trip_energy_breakdown(
+        aircraft,
+        geometry,
+        payload_kg,
+        range_energy_fraction=range_energy_fraction,
+    ).total_kwh
 
 
 def trip_time(aircraft: Aircraft, geometry: ServiceGeometry, box_count: int) -> float:
@@ -199,20 +314,30 @@ def safe_payload(
     reserve_ratio: float,
     *,
     iterations: int = 80,
+    range_energy_fraction: float = 1.0,
 ) -> float:
     """Return the largest continuous payload satisfying the reserve constraint."""
     if not 0.0 <= reserve_ratio < 1.0:
         raise ValueError("reserve_ratio must be in [0, 1)")
     energy_limit = (1.0 - reserve_ratio) * aircraft.usable_energy_kwh
-    if trip_energy(aircraft, geometry, 0.0) > energy_limit + NUMERIC_TOLERANCE:
+    if trip_energy(
+        aircraft, geometry, 0.0, range_energy_fraction=range_energy_fraction
+    ) > energy_limit + NUMERIC_TOLERANCE:
         return 0.0
-    if trip_energy(aircraft, geometry, aircraft.max_payload_kg) <= energy_limit + NUMERIC_TOLERANCE:
+    if trip_energy(
+        aircraft,
+        geometry,
+        aircraft.max_payload_kg,
+        range_energy_fraction=range_energy_fraction,
+    ) <= energy_limit + NUMERIC_TOLERANCE:
         return aircraft.max_payload_kg
     lower = 0.0
     upper = aircraft.max_payload_kg
     for _ in range(iterations):
         middle = (lower + upper) / 2.0
-        if trip_energy(aircraft, geometry, middle) <= energy_limit:
+        if trip_energy(
+            aircraft, geometry, middle, range_energy_fraction=range_energy_fraction
+        ) <= energy_limit:
             lower = middle
         else:
             upper = middle
@@ -232,6 +357,51 @@ def _great_circle_distance_m(lon1: float, lat1: float, lon2: float, lat2: float)
     return 2.0 * earth_radius_m * asin(sqrt(haversine))
 
 
+_WGS84_GEOD = Geod(ellps="WGS84")
+
+
+def _ellipsoidal_distance_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """Return the WGS84 inverse-geodesic distance in metres."""
+    _, _, distance_m = _WGS84_GEOD.inv(lon1, lat1, lon2, lat2)
+    return float(distance_m)
+
+
+def _segment_intersects_closed_rectangle(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+) -> bool:
+    """Liang-Barsky intersection including boundary and corner touches."""
+    dx = x2 - x1
+    dy = y2 - y1
+    lower = 0.0
+    upper = 1.0
+    tolerance = 1e-12
+    for direction, offset in (
+        (-dx, x1 - x_min),
+        (dx, x_max - x1),
+        (-dy, y1 - y_min),
+        (dy, y_max - y1),
+    ):
+        if abs(direction) <= tolerance:
+            if offset < -tolerance:
+                return False
+            continue
+        ratio = offset / direction
+        if direction < 0.0:
+            lower = max(lower, ratio)
+        else:
+            upper = min(upper, ratio)
+        if lower > upper + tolerance:
+            return False
+    return True
+
+
 def _line_cells(
     lon1: float,
     lat1: float,
@@ -245,27 +415,34 @@ def _line_cells(
     rows: int,
     columns: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Return raster cells touched by dense sub-pixel sampling of a segment."""
+    """Return every DEM cell touched by the closed route segment."""
     column1 = (lon1 - x_origin) / x_scale
     row1 = (y_origin - lat1) / y_scale
     column2 = (lon2 - x_origin) / x_scale
     row2 = (y_origin - lat2) / y_scale
-    pixel_span = max(abs(column2 - column1), abs(row2 - row1))
-    sample_count = max(2, int(pixel_span * 32.0) + 1)
-    sampled_columns = np.floor(np.linspace(column1, column2, sample_count)).astype(int)
-    sampled_rows = np.floor(np.linspace(row1, row2, sample_count)).astype(int)
-    valid = (
-        (sampled_rows >= 0)
-        & (sampled_rows < rows)
-        & (sampled_columns >= 0)
-        & (sampled_columns < columns)
-    )
-    pairs = np.unique(
-        np.column_stack((sampled_rows[valid], sampled_columns[valid])), axis=0
-    )
-    if pairs.size == 0:
+    row_start = max(0, floor(min(row1, row2)) - 1)
+    row_stop = min(rows - 1, floor(max(row1, row2)) + 1)
+    column_start = max(0, floor(min(column1, column2)) - 1)
+    column_stop = min(columns - 1, floor(max(column1, column2)) + 1)
+    pairs = [
+        (row, column)
+        for row in range(row_start, row_stop + 1)
+        for column in range(column_start, column_stop + 1)
+        if _segment_intersects_closed_rectangle(
+            column1,
+            row1,
+            column2,
+            row2,
+            float(column),
+            float(column + 1),
+            float(row),
+            float(row + 1),
+        )
+    ]
+    if not pairs:
         raise ValueError("route lies outside DEM coverage")
-    return pairs[:, 0], pairs[:, 1]
+    pair_array = np.asarray(sorted(set(pairs)), dtype=int)
+    return pair_array[:, 0], pair_array[:, 1]
 
 
 def _required_file(root: Path, name: str) -> Path:
@@ -273,6 +450,31 @@ def _required_file(root: Path, name: str) -> Path:
     if len(matches) != 1:
         raise FileNotFoundError(f"expected one {name!r} below {root}, found {len(matches)}")
     return matches[0]
+
+
+def _geotiff_epsg(geo_keys: Sequence[int]) -> int:
+    """Extract the geographic or projected EPSG code from a GeoKey directory."""
+    if len(geo_keys) < 4:
+        raise ValueError("invalid GeoTIFF GeoKey directory")
+    key_count = int(geo_keys[3])
+    for index in range(key_count):
+        offset = 4 + index * 4
+        key_id, tag_location, count, value_offset = geo_keys[offset : offset + 4]
+        if key_id in (2048, 3072) and tag_location == 0 and count == 1:
+            return int(value_offset)
+    raise ValueError("GeoTIFF does not declare a geographic/projected EPSG code")
+
+
+def _parse_nodata(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)):
+        value = value[0]
+    text = value.decode("ascii") if isinstance(value, bytes) else str(value)
+    text = text.strip().strip("\x00")
+    if not text:
+        return None
+    return float(text)
 
 
 def load_problem_data(problem_dir: Path) -> ProblemData:
@@ -329,10 +531,37 @@ def load_problem_data(problem_dir: Path) -> ProblemData:
         dem = np.asarray(image, dtype=float)
         tie_point = image.tag_v2[33922]
         pixel_scale = image.tag_v2[33550]
+        geo_keys = image.tag_v2[34735]
+        nodata = _parse_nodata(image.tag_v2.get(42113))
     x_origin = float(tie_point[3])
     y_origin = float(tie_point[4])
     x_scale = float(pixel_scale[0])
     y_scale = float(pixel_scale[1])
+    epsg = _geotiff_epsg(geo_keys)
+    if epsg != 4326:
+        raise ValueError(f"expected WGS84 geographic DEM (EPSG:4326), got EPSG:{epsg}")
+    if x_scale <= 0.0 or y_scale <= 0.0:
+        raise ValueError("GeoTIFF pixel scales must be positive")
+    bounds = (
+        x_origin,
+        y_origin - dem.shape[0] * y_scale,
+        x_origin + dem.shape[1] * x_scale,
+        y_origin,
+    )
+    dem_metadata = GeoTiffMetadata(
+        path=dem_file,
+        columns=int(dem.shape[1]),
+        rows=int(dem.shape[0]),
+        epsg=epsg,
+        crs_name="WGS 84",
+        pixel_width_degrees=x_scale,
+        pixel_height_degrees=y_scale,
+        nodata=nodata,
+        affine=(x_scale, 0.0, x_origin, 0.0, -y_scale, y_origin),
+        bounds=bounds,
+    )
+    if not (bounds[0] <= center_lon <= bounds[2] and bounds[1] <= center_lat <= bounds[3]):
+        raise ValueError("dispatch center lies outside DEM coverage")
 
     geometries: Dict[str, ServiceGeometry] = {}
     for _, row in node_raw.iloc[6:21].iterrows():
@@ -340,6 +569,8 @@ def load_problem_data(problem_dir: Path) -> ProblemData:
         longitude = float(row.iloc[2])
         latitude = float(row.iloc[3])
         elevation = float(row.iloc[4])
+        if not (bounds[0] <= longitude <= bounds[2] and bounds[1] <= latitude <= bounds[3]):
+            raise ValueError(f"service {service_id} lies outside DEM coverage")
         dem_rows, dem_columns = _line_cells(
             center_lon,
             center_lat,
@@ -353,20 +584,39 @@ def load_problem_data(problem_dir: Path) -> ProblemData:
             columns=dem.shape[1],
         )
         route_elevations = dem[dem_rows, dem_columns]
-        route_elevations = route_elevations[np.isfinite(route_elevations)]
-        if route_elevations.size == 0:
+        valid = np.isfinite(route_elevations)
+        if nodata is not None:
+            valid &= ~np.isclose(route_elevations, nodata, rtol=0.0, atol=1e-12)
+        if not valid.any():
             raise ValueError(f"route {service_id} has no valid DEM pixels")
-        peak_ground = float(route_elevations.max())
+        valid_elevations = route_elevations[valid]
+        valid_rows = dem_rows[valid]
+        valid_columns = dem_columns[valid]
+        peak_index = int(np.argmax(valid_elevations))
+        peak_ground = float(valid_elevations[peak_index])
+        peak_row = int(valid_rows[peak_index])
+        peak_column = int(valid_columns[peak_index])
         cruise_altitude = peak_ground + 50.0
+        haversine_distance = _great_circle_distance_m(
+            center_lon, center_lat, longitude, latitude
+        )
         geometries[service_id] = ServiceGeometry(
             service_id=service_id,
-            distance_m=_great_circle_distance_m(
+            distance_m=_ellipsoidal_distance_m(
                 center_lon, center_lat, longitude, latitude
             ),
             peak_ground_m=peak_ground,
             cruise_altitude_m=cruise_altitude,
             center_climb_m=max(0.0, cruise_altitude - center_elevation),
             service_climb_m=max(0.0, cruise_altitude - (elevation + 30.0)),
+            haversine_distance_m=haversine_distance,
+            peak_row=peak_row,
+            peak_column=peak_column,
+            peak_longitude=x_origin + (peak_column + 0.5) * x_scale,
+            peak_latitude=y_origin - (peak_row + 0.5) * y_scale,
+            service_longitude=longitude,
+            service_latitude=latitude,
+            service_ground_m=elevation,
         )
 
     return ProblemData(
@@ -374,6 +624,10 @@ def load_problem_data(problem_dir: Path) -> ProblemData:
         boxes=boxes,
         geometries=geometries,
         material_types=material_types,
+        dem_metadata=dem_metadata,
+        center_longitude=center_lon,
+        center_latitude=center_lat,
+        center_elevation_m=center_elevation,
     )
 
 
@@ -400,7 +654,11 @@ def _type_properties(data: ProblemData) -> Dict[str, Tuple[float, float]]:
 
 
 def generate_candidates(
-    data: ProblemData, service_id: str, reserve_ratio: float = 0.20
+    data: ProblemData,
+    service_id: str,
+    reserve_ratio: float = 0.20,
+    *,
+    range_energy_fraction: float = 1.0,
 ) -> List[CandidateTrip]:
     """Enumerate feasible type-count patterns and remove same-pattern domination."""
     geometry = data.geometries[service_id]
@@ -425,7 +683,12 @@ def generate_candidates(
                 continue
             if volume > aircraft.volume_capacity_m3 + NUMERIC_TOLERANCE:
                 continue
-            energy = trip_energy(aircraft, geometry, mass)
+            energy = trip_energy(
+                aircraft,
+                geometry,
+                mass,
+                range_energy_fraction=range_energy_fraction,
+            )
             energy_limit = (1.0 - reserve_ratio) * aircraft.usable_energy_kwh
             if energy > energy_limit + NUMERIC_TOLERANCE:
                 continue
@@ -542,13 +805,23 @@ def _candidate_lookup(
     return lookup
 
 
-def solve_greedy(data: ProblemData, reserve_ratio: float = 0.20) -> MethodSolution:
+def solve_greedy(
+    data: ProblemData,
+    reserve_ratio: float = 0.20,
+    *,
+    range_energy_fraction: float = 1.0,
+) -> MethodSolution:
     """Solve by best-fit decreasing followed by deterministic pair merging."""
     started = perf_counter()
     properties = _type_properties(data)
     selected: List[CandidateTrip] = []
     for service_id in sorted(data.geometries):
-        candidates = generate_candidates(data, service_id, reserve_ratio)
+        candidates = generate_candidates(
+            data,
+            service_id,
+            reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+        )
         if not candidates:
             raise InfeasibleProblemError(f"no feasible trip for {service_id}")
         lookup = _candidate_lookup(candidates)
@@ -575,7 +848,10 @@ def solve_greedy(data: ProblemData, reserve_ratio: float = 0.20) -> MethodSoluti
                     payload_capacity = min(
                         aircraft.max_payload_kg,
                         safe_payload(
-                            aircraft, data.geometries[service_id], reserve_ratio
+                            aircraft,
+                            data.geometries[service_id],
+                            reserve_ratio,
+                            range_energy_fraction=range_energy_fraction,
                         ),
                     )
                     residual = (
@@ -633,19 +909,32 @@ def solve_greedy(data: ProblemData, reserve_ratio: float = 0.20) -> MethodSoluti
     solution = _solution_from_candidates(
         data, "greedy", selected, perf_counter() - started
     )
-    validate_solution(data, solution.trips, reserve_ratio)
+    validate_solution(
+        data,
+        solution.trips,
+        reserve_ratio,
+        range_energy_fraction=range_energy_fraction,
+    )
     return solution
 
 
 def solve_dynamic_programming(
-    data: ProblemData, reserve_ratio: float = 0.20
+    data: ProblemData,
+    reserve_ratio: float = 0.20,
+    *,
+    range_energy_fraction: float = 1.0,
 ) -> MethodSolution:
     """Solve every independent service exactly by acyclic count-state DP."""
     started = perf_counter()
     selected: List[CandidateTrip] = []
     for service_id in sorted(data.geometries):
         target = _target_counts(data, service_id)
-        candidates = generate_candidates(data, service_id, reserve_ratio)
+        candidates = generate_candidates(
+            data,
+            service_id,
+            reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+        )
         if not candidates:
             raise InfeasibleProblemError(f"no feasible trip for {service_id}")
 
@@ -681,7 +970,12 @@ def solve_dynamic_programming(
     solution = _solution_from_candidates(
         data, "dynamic_programming", selected, perf_counter() - started
     )
-    validate_solution(data, solution.trips, reserve_ratio)
+    validate_solution(
+        data,
+        solution.trips,
+        reserve_ratio,
+        range_energy_fraction=range_energy_fraction,
+    )
     return solution
 
 
@@ -703,12 +997,22 @@ def _run_milp(
     return result.x
 
 
-def solve_milp(data: ProblemData, reserve_ratio: float = 0.20) -> MethodSolution:
+def solve_milp(
+    data: ProblemData,
+    reserve_ratio: float = 0.20,
+    *,
+    range_energy_fraction: float = 1.0,
+) -> MethodSolution:
     """Solve global set partitioning with three lexicographic MILP stages."""
     started = perf_counter()
     candidates: List[CandidateTrip] = []
     for service_id in sorted(data.geometries):
-        service_candidates = generate_candidates(data, service_id, reserve_ratio)
+        service_candidates = generate_candidates(
+            data,
+            service_id,
+            reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+        )
         if not service_candidates:
             raise InfeasibleProblemError(f"no feasible trip for {service_id}")
         candidates.extend(service_candidates)
@@ -772,7 +1076,12 @@ def solve_milp(data: ProblemData, reserve_ratio: float = 0.20) -> MethodSolution
     solution = _solution_from_candidates(
         data, "milp", selected, perf_counter() - started
     )
-    validate_solution(data, solution.trips, reserve_ratio)
+    validate_solution(
+        data,
+        solution.trips,
+        reserve_ratio,
+        range_energy_fraction=range_energy_fraction,
+    )
     return solution
 
 
@@ -780,6 +1089,8 @@ def validate_solution(
     data: ProblemData,
     trips: Sequence[TripResult],
     reserve_ratio: float = 0.20,
+    *,
+    range_energy_fraction: float = 1.0,
 ) -> None:
     """Raise ValueError unless the result satisfies all question-1 constraints."""
     boxes_by_id = {box.box_id: box for box in data.boxes}
@@ -794,7 +1105,12 @@ def validate_solution(
             raise ValueError(f"{trip.trip_id} mixes service areas")
         mass = sum(box.mass_kg for box in trip_boxes)
         volume = sum(box.volume_m3 for box in trip_boxes)
-        energy = trip_energy(aircraft, geometry, mass)
+        energy = trip_energy(
+            aircraft,
+            geometry,
+            mass,
+            range_energy_fraction=range_energy_fraction,
+        )
         duration = trip_time(aircraft, geometry, len(trip_boxes))
         return_soc = 100.0 * (1.0 - energy / aircraft.usable_energy_kwh)
         if abs(mass - trip.mass_kg) > 1e-7:

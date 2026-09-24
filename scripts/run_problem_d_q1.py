@@ -28,11 +28,14 @@ from math_model_cup.problem_d_q1 import (  # noqa: E402
     solve_milp,
     validate_solution,
 )
+from math_model_cup.problem_d_q1_reporting import (  # noqa: E402
+    generate_complete_outputs,
+)
 
 
 METHOD_LABELS = {
-    "greedy": "最佳适应递减启发式",
-    "dynamic_programming": "多目标动态规划",
+    "greedy": "BFD+合并改进",
+    "dynamic_programming": "词典序动态规划",
     "milp": "集合划分 MILP",
 }
 
@@ -174,45 +177,8 @@ def _write_summary(
 
 
 def run_all(problem_dir: Path, output_dir: Path) -> Dict[str, MethodSolution]:
-    data = load_problem_data(problem_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    solutions = [
-        solve_greedy(data),
-        solve_dynamic_programming(data),
-        solve_milp(data),
-    ]
-    for solution in solutions:
-        validate_solution(data, solution.trips)
-        pd.DataFrame(solution_rows(solution)).to_csv(
-            output_dir / f"{solution.method}_trips.csv",
-            index=False,
-            encoding="utf-8-sig",
-        )
-
-    comparison = pd.DataFrame(_comparison_rows(solutions))
-    comparison.to_csv(
-        output_dir / "method_comparison.csv", index=False, encoding="utf-8-sig"
-    )
-    safe_payloads = pd.DataFrame(_safe_payload_rows(data, reserve_ratio=0.20))
-    safe_payloads.to_csv(
-        output_dir / "safe_payloads.csv", index=False, encoding="utf-8-sig"
-    )
-    sensitivity = pd.DataFrame(
-        _sensitivity_rows(data, (0.00, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40))
-    )
-    sensitivity.to_csv(
-        output_dir / "safety_margin_sensitivity.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
-    _write_summary(
-        output_dir / "summary.md",
-        solutions,
-        comparison,
-        safe_payloads,
-        sensitivity,
-    )
-    return {solution.method: solution for solution in solutions}
+    results = generate_complete_outputs(problem_dir, output_dir)
+    return dict(results.solutions)
 
 
 def main() -> None:
