@@ -1,0 +1,4 @@
+﻿link_type,endpoint_a,endpoint_b,a_to_b_limit_db,b_to_a_limit_db,bidirectional_limit_db,los_range_km,obstructed_range_km
+direct,运输无人机,固定网关 G01,122,129,122,12.51090592,3.95629583
+relay_access,运输无人机,中继接入端,116,116,116,6.270306328,1.982844962
+relay_backhaul,中继回传端,固定网关 G01,126,134,126,19.82844962,6.270306328

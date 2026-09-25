@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "checks": 16,
+  "failed": 0,
+  "communication_samples": 15480,
+  "communication_outages": 0,
+  "min_access_margin_db": 0.7145296143319797,
+  "min_backhaul_margin_db": 0.5209198478089974,
+  "sha256": {
+    "box_deliveries.csv": "deeb871f9e9e38101c8f7ba90759382e502620225c0a1f84ffca6a6a39671aba",
+    "communication_summary.csv": "fcdedfb0e3b7b150b9814151c2d4bc6135c40a0afd98a6af87c983e63ae49c5b",
+    "communication_timeline_10s.csv": "b5160cc4cbe3839c514584b90bd94930d12955e25dc55fa80f4b098c821a9055",
+    "communication_timeline_2s.csv": "2863847fba3a52b7d9a146f41634dba17414b6454ac599c301dbc112f4fbef92",
+    "hover_sites.csv": "d6cd0eb9d5a92a17b6c467e4da5b2dd64ef122cf8ac897dfe1edf2c5f9ff9a95",
+    "objective_comparison.csv": "64e004882fea9b8ebda033cf802e6ed9eb855b82f552adc63499d8eda2f98aa1",
+    "pareto_candidates.csv": "583ab5629838c93329661a1cf917c454bf7af28cfff50a3adbf67d0aba243db4",
+    "relay_plan.csv": "5c621795be4874c58825e20981177558de971fbda4b04f4f11b93017729d9c31",
+    "resource_usage.csv": "11be06ab4dcdcdf32bd4d2023130e685f7f5082efba14231aa314e71db0439ab",
+    "transport_plan.csv": "9aaa67043201859ac2806092b5495b5c13116238caff917303544d74f941a82e",
+    "verification_checks.csv": "83a926cafd389799a2b8126419230fc51a649b021c59b0301f4e51d90e9402a9"
+  }
+}

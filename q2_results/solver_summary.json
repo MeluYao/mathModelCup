@@ -1,0 +1,29 @@
+{
+  "main_metrics": {
+    "hard_violations": 0,
+    "max_hard_lateness_s": 0.0,
+    "weighted_tardiness": 167.64024820858674,
+    "weighted_delivery_ratio": 0.7030414315855584,
+    "on_time_boxes": 65,
+    "makespan_s": 9943.021474165032,
+    "energy_kwh": 67.30489708850475,
+    "trips": 22
+  },
+  "pareto_count": 11,
+  "candidate_count": 24,
+  "ideal": {
+    "weighted_delivery_ratio": 0.6839396873923806,
+    "makespan_s": 9943.021474165032,
+    "energy_kwh": 60.94067061704867,
+    "trips": 17.0
+  },
+  "nadir": {
+    "weighted_delivery_ratio": 0.7731527167487281,
+    "makespan_s": 10715.58539939687,
+    "energy_kwh": 69.03486058116859,
+    "trips": 23.0
+  },
+  "elapsed_s": 236.32815670967102,
+  "method": "beam route merging + deterministic neighborhood resource scheduling",
+  "seed_routes": 25
+}

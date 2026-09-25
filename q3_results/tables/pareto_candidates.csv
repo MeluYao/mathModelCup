@@ -1,0 +1,2 @@
+﻿policy,merge_gap_s,hard_violations,max_hard_lateness_s,weighted_tardiness,weighted_delivery_ratio,on_time_boxes,joint_makespan_s,transport_energy_kwh,relay_energy_kwh,total_energy_kwh,transport_trips,relay_trips,total_trips,transport_shift_s,hover_sites,ideal_distance
+balanced,600,0,0,223.906417518,0.79077558145,63,11323.8968198,67.3048970885,4.06788112516,71.3727782137,22,5,27,1566.80730148,3,0

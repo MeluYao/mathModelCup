@@ -1,0 +1,17 @@
+﻿check,passed,detail
+80箱唯一交付,True,"rows=80,unique=80"
+服务区一致,True,逐箱核对
+硬时限满足,True,min_margin=1114.140963s
+运输返航SOC,True,min=0.209437576
+中继返航SOC,True,min=0.462743329
+悬停高度上限,True,max=300.000m
+transport_aircraft无重叠且周转完成,True,resources=8
+transport_battery无重叠且周转完成,True,resources=13
+relay_aircraft无重叠且周转完成,True,resources=2
+relay_energy无重叠且周转完成,True,resources=3
+中继能耗独立复算,True,max_abs_error=6.41e-12kWh
+中继时刻独立复算,True,max_abs_error=4.85e-08s
+连续通信细网格复核,True,"samples=15480,outages=0,min_access_margin=0.714530dB"
+中继回传链路,True,min_margin=0.520920dB
+联合完成时间,True,T=11339.306273800s
+总能耗,True,E=71.389097769kWh

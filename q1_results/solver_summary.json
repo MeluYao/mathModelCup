@@ -1,0 +1,38 @@
+{
+  "baseline_reserve": 0.2,
+  "main_metrics": [
+    18,
+    59.132260326932986,
+    32776.51678274434
+  ],
+  "number_of_physical_patterns": 742,
+  "number_of_baseline_patterns": 732,
+  "state_counts": {
+    "S001": 324,
+    "S002": 60,
+    "S003": 60,
+    "S004": 32,
+    "S005": 32,
+    "S006": 32,
+    "S007": 24,
+    "S008": 24,
+    "S009": 8,
+    "S010": 8,
+    "S011": 8,
+    "S012": 8,
+    "S013": 8,
+    "S014": 8,
+    "S015": 8
+  },
+  "pareto_points": 1,
+  "largest_feasible_reserve": 0.3526764734735113,
+  "limiting_services": [
+    "S008"
+  ],
+  "elapsed_seconds": 14.545637607574463,
+  "numerical_tolerances": {
+    "energy_kwh": 1e-09,
+    "time_s": 1e-07,
+    "feasibility_reserve_fraction": 1e-12
+  }
+}

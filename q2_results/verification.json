@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "checks": 96,
+  "failed": 0,
+  "flight_recomputations": 22,
+  "sha256": {
+    "deliveries_balanced.csv": "d6ef522e51612d0f41dc6cff599585a59c389b4f824951b458d8a5da28ebfb72",
+    "deliveries_energy.csv": "e5e2d6458108dd406e8e78f6e33a417ded904191f22a1d3ded3db83cff1471e0",
+    "deliveries_makespan.csv": "d6ef522e51612d0f41dc6cff599585a59c389b4f824951b458d8a5da28ebfb72",
+    "deliveries_timely.csv": "e5e2d6458108dd406e8e78f6e33a417ded904191f22a1d3ded3db83cff1471e0",
+    "deliveries_trips.csv": "e5e2d6458108dd406e8e78f6e33a417ded904191f22a1d3ded3db83cff1471e0",
+    "objective_comparison.csv": "c0d2453f0f364e6695ef7ac824fd3ce00ad5139ec342a12512ec8eac9de8de90",
+    "pareto_candidates.csv": "0224e616b9652398e661208df9135857713ee34532d42ec59144498a25120197",
+    "plan_balanced.csv": "fa0dd5d9636a5a699ee4f635ca996b64709314425036ec533a555e039457704f",
+    "plan_energy.csv": "bd77d8402b8523c8500b5525f704a276f7a6fe87711157a38422e44dc06a171a",
+    "plan_makespan.csv": "fa0dd5d9636a5a699ee4f635ca996b64709314425036ec533a555e039457704f",
+    "plan_timely.csv": "bd77d8402b8523c8500b5525f704a276f7a6fe87711157a38422e44dc06a171a",
+    "plan_trips.csv": "bd77d8402b8523c8500b5525f704a276f7a6fe87711157a38422e44dc06a171a",
+    "Q2_运输架次.csv": "5f50740e377f778f7e0b63733dc39c37deb96f7cd17bb405323fed8fd1f601ab",
+    "Q2_逐箱交付.csv": "956487eed28b595387a55c12bc47b4c1abaf17dfcb1b63720091eeacd00d5694",
+    "resource_usage.csv": "df346c6b36f10fad2656bf2e44ea85be57d5330099db5d4e8bbcc321e842352b",
+    "route_legs.csv": "91c7feede09eac5ac32eeb000a8b38bc0df4b9f3f4f26655af50001d37977c62",
+    "verification_checks.csv": "1bcb92d5a559bc9243d00b1f06ecdb1d90638f105f28a1519c204f17a81f0683"
+  }
+}

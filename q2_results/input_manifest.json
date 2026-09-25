@@ -1,0 +1,26 @@
+[
+  {
+    "path": "preprocessing\\tables\\boxes.csv",
+    "sha256": "6bb8490daf3ea1ba55ba80e4294bf86c778e6191ad14b73f3015b9e2c99b1c33"
+  },
+  {
+    "path": "preprocessing\\tables\\transport_types.csv",
+    "sha256": "64b69c799bf5324b7051678527aad7e4b1947cb85e66fde3aa69101246394934"
+  },
+  {
+    "path": "preprocessing\\tables\\transport_fleet.csv",
+    "sha256": "1e55694df927f6951a5aad9844d0836a47ab47662e368af8d131e96801d76718"
+  },
+  {
+    "path": "preprocessing\\tables\\transport_battery_inventory.csv",
+    "sha256": "de61f8e4b044e9aedcf07fc0d791a9a57164ef6402ee25e4fa46cb0019b7891a"
+  },
+  {
+    "path": "preprocessing\\tables\\arcs.csv",
+    "sha256": "ff69745f9c4f108331ffcf21ff4b0234614a7cef1e9d4a2078e22b5c26520a67"
+  },
+  {
+    "path": "q1_results\\tables\\plan_N_E_T.csv",
+    "sha256": "990eb86704b02b028575284a72d94c9c99b21ce60b0efe4992a6062b5d984aff"
+  }
+]

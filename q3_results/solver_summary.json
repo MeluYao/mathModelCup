@@ -1,0 +1,41 @@
+{
+  "main_metrics": {
+    "policy": "balanced_refined_2s",
+    "merge_gap_s": 600.0,
+    "hard_violations": 0,
+    "max_hard_lateness_s": 0.0,
+    "weighted_tardiness": 224.54990490597044,
+    "weighted_delivery_ratio": 0.7925104103094731,
+    "on_time_boxes": 63,
+    "joint_makespan_s": 11339.306273835968,
+    "transport_energy_kwh": 67.30489708849,
+    "relay_energy_kwh": 4.084200680574471,
+    "total_energy_kwh": 71.38909776906446,
+    "transport_trips": 22,
+    "relay_trips": 5,
+    "total_trips": 27,
+    "transport_shift_s": 1582.216755565967,
+    "hover_sites": 3
+  },
+  "candidate_count": 8,
+  "pareto_count": 1,
+  "ideal": {
+    "weighted_delivery_ratio": 0.7907755814495838,
+    "joint_makespan_s": 11323.896819753261,
+    "total_energy_kwh": 71.3727782136503,
+    "transport_trips": 22.0,
+    "relay_trips": 5.0
+  },
+  "nadir": {
+    "weighted_delivery_ratio": 0.7907755814495838,
+    "joint_makespan_s": 11323.896819753261,
+    "total_energy_kwh": 71.3727782136503,
+    "transport_trips": 22.0,
+    "relay_trips": 5.0
+  },
+  "elapsed_s": 89.50152325630188,
+  "communication_time_step_s": 2.0,
+  "link_safety_margin_db": 0.2,
+  "method": "transport candidate comparison + DEM link screening + relay set cover/assignment search",
+  "refinement": "主方案用2秒网格重建服务窗口并重新修复资源调度；最终独立验证再用30米DEM视线采样。"
+}

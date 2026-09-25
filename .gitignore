@@ -11,6 +11,7 @@ tmp/
 # Local environments, data, and generated artifacts
 .conda/
 .venv/
+.preprocess_deps/
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*

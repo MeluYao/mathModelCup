@@ -1,0 +1,17 @@
+{
+  "crs": "EPSG:4326",
+  "pixel_is_point": true,
+  "width": 1486,
+  "height": 1309,
+  "lon_center_min": 109.03277777777778,
+  "lon_center_max": 109.44527777777778,
+  "lat_center_min": 22.86138888888889,
+  "lat_center_max": 23.224722222222223,
+  "pixel_lon_deg": 0.00027777777777777393,
+  "pixel_lat_deg": 0.0002777777777777777,
+  "nodata_source": -32767,
+  "nodata_output": "NaN",
+  "nodata_count": 0,
+  "min_m": 41.68907928466797,
+  "max_m": 1132.8560791015625
+}

@@ -1,0 +1,9 @@
+{
+  "method": "WGS84 local linear east/north, reference O01",
+  "lon0": 109.2308517,
+  "lat0": 23.0085095,
+  "east_m_per_degree": 102516.10813246331,
+  "north_m_per_degree": 110744.12799955255,
+  "path": "straight in local east/north; equivalent to linear lon/lat interpolation",
+  "max_task_pair_relative_error": 0.0005154676929166602
+}

@@ -1,0 +1,11 @@
+﻿scenario,relay_flight_id,assigned_groups,copy_count,additional_copies
+2组,Q3-R-001,G1;G2,2,1
+2组,Q3-R-002,G1,1,0
+2组,Q3-R-003,G1;G2,2,1
+2组,Q3-R-004,G1,1,0
+2组,Q3-R-005,G1,1,0
+3组,Q3-R-001,G2;G3,2,1
+3组,Q3-R-002,G1,1,0
+3组,Q3-R-003,G1;G2,2,1
+3组,Q3-R-004,G3,1,0
+3组,Q3-R-005,G1,1,0

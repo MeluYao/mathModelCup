@@ -1,0 +1,4 @@
+﻿type_id,type_name,empty_mass_kg,max_payload_kg,capacity_m3,cruise_mps,range_empty_m,range_full_m,energy_kwh,reserve_fraction,prepare_s,load_per_box_s,handover_base_s,handover_per_box_s,up_mps,down_mps,up_efficiency,down_efficiency,source_file,source_sheet,source_row
+A,中轻载标准测试多旋翼,70,25,0.06,12,25000,20000,4.5,0.2,300,30,150,30,3,2.5,0.72,0,运输无人机数据.xlsx,数据,3
+B,中载标准测试多旋翼,65,30,0.073,15,28000,16000,4,0.2,300,30,150,30,3,2.5,0.72,0,运输无人机数据.xlsx,数据,4
+C,重载标准测试多旋翼,69.9,80,0.25,15,26000,12000,8,0.2,300,30,180,36,2.5,2,0.72,0,运输无人机数据.xlsx,数据,5

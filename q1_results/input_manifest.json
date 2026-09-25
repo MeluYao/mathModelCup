@@ -1,0 +1,14 @@
+[
+  {
+    "path": "preprocessing\\tables\\boxes.csv",
+    "sha256": "6bb8490daf3ea1ba55ba80e4294bf86c778e6191ad14b73f3015b9e2c99b1c33"
+  },
+  {
+    "path": "preprocessing\\tables\\transport_types.csv",
+    "sha256": "64b69c799bf5324b7051678527aad7e4b1947cb85e66fde3aa69101246394934"
+  },
+  {
+    "path": "preprocessing\\tables\\arcs.csv",
+    "sha256": "ff69745f9c4f108331ffcf21ff4b0234614a7cef1e9d4a2078e22b5c26520a67"
+  }
+]
