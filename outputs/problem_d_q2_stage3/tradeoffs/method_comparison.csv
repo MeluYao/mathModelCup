@@ -1,0 +1,3 @@
+﻿method,validation,solver_status,normalized_weighted_delivery_time,makespan_s,energy_kwh,trip_count,runtime_s,delivered_box_count,minimum_return_soc_percent,fallback,backend,seed_retained,native_improved_seed,has_feasible_incumbent,incumbent_source,own_incumbent,pareto_nondominated,lexicographic_rank
+published_priority,PASS,FEASIBLE,0.516328617103963,9408.443943661947,64.83172808040707,22,2.0390929,80,21.46754357508445,,,False,False,True,grouped_local_search,True,True,1
+trip_count_priority,PASS,FEASIBLE,0.7592250494690277,12439.780983079312,63.335903870203,15,0.9429879000000003,80,20.949278300924455,,,False,False,True,grouped_local_search,True,True,2

@@ -74,21 +74,33 @@ def schedule_trips_greedy(
     data: Q2Data,
     plans: Sequence[TripPlan],
     method: str = "greedy_schedule",
+    *,
+    enforce_hard_deadlines: bool = True,
 ) -> Q2Solution:
     """Schedule urgent trips first at the earliest compatible resource time."""
     started = perf_counter()
     aircraft_available = {unit.aircraft_id: 0.0 for unit in data.aircraft_units}
     battery_available = {battery.battery_id: 0.0 for battery in data.batteries}
     batteries = {battery.battery_id: battery for battery in data.batteries}
-    ordered_plans = sorted(
-        plans,
-        key=lambda plan: (
-            _latest_start(data, plan),
-            -sum(data.boxes[box_id].priority_weight for box_id in plan.box_ids),
-            plan.duration_s,
-            plan.signature,
+    ordered_indices = sorted(
+        range(len(plans)),
+        key=lambda index: (
+            min(
+                (
+                    data.boxes[box_id].hard_deadline_s
+                    for box_id in plans[index].box_ids
+                    if data.boxes[box_id].hard_deadline_s is not None
+                ),
+                default=inf,
+            ),
+            min(
+                data.boxes[box_id].expected_time_s
+                for box_id in plans[index].box_ids
+            ),
+            index,
         ),
     )
+    ordered_plans = [plans[index] for index in ordered_indices]
 
     executions: List[TripExecution] = []
     for index, plan in enumerate(ordered_plans, start=1):
@@ -105,7 +117,7 @@ def schedule_trips_greedy(
                     aircraft_available[unit.aircraft_id],
                     battery_available[battery.battery_id],
                 )
-                if _hard_deadlines_hold(data, plan, start):
+                if not enforce_hard_deadlines or _hard_deadlines_hold(data, plan, start):
                     choices.append((start, unit.aircraft_id, battery.battery_id))
         if not choices:
             raise InfeasibleQ2Error(

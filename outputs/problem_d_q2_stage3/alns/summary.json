@@ -1,0 +1,104 @@
+{
+  "method": "alns",
+  "solver_status": "FEASIBLE",
+  "validation": "PASS",
+  "runtime_s": 2.8645879,
+  "objective": {
+    "normalized_weighted_delivery_time": 0.516328617103963,
+    "makespan_s": 9408.443943661947,
+    "energy_kwh": 64.83172808040707,
+    "trip_count": 22
+  },
+  "constraint_check": {
+    "validation": "PASS",
+    "required_box_count": 80,
+    "delivered_box_count": 80,
+    "missing_box_count": 0,
+    "duplicate_box_count": 0,
+    "hard_deadline_violation_count": 0,
+    "aircraft_overlap_count": 0,
+    "battery_overlap_count": 0,
+    "energy_violation_count": 0,
+    "minimum_return_soc_percent": 21.46754357508445
+  },
+  "diagnostics": {
+    "initialization": "provided_solution",
+    "initial_trip_count": 18,
+    "accepted_repairs": 6,
+    "accepted_merges": 3,
+    "accepted_local_moves": 2,
+    "accepted_retypes": 1,
+    "best_local_seed": 20260925,
+    "grouped_quality": [
+      0.0,
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22.0,
+      15112.487545996846
+    ],
+    "incumbent_source": "provided_seed",
+    "reserve_ratio": 0.2,
+    "objective_order": "published",
+    "seed": 20260924,
+    "iterations_requested": 20,
+    "feasible_moves": 20,
+    "repair_feasibility_fallbacks": 9,
+    "accepted_moves": 1,
+    "improving_moves": 0,
+    "restarts": 0,
+    "destroy_weights": {
+      "random_box": 1.0,
+      "worst_timeliness": 1.0,
+      "high_energy": 1.0,
+      "same_service": 1.0,
+      "whole_trip": 1.0
+    },
+    "repair_weights": {
+      "minimum_increment": 1.0,
+      "regret_2": 1.0
+    },
+    "convergence_history": [
+      [
+        0,
+        [
+          0.516328617103963,
+          9408.443943661947,
+          64.83172808040707,
+          22
+        ]
+      ],
+      [
+        20,
+        [
+          0.516328617103963,
+          9408.443943661947,
+          64.83172808040707,
+          22
+        ]
+      ]
+    ],
+    "seed_objective": [
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22
+    ],
+    "seed_retained": true,
+    "native_improved_seed": false,
+    "native_candidate_objective": [
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22
+    ],
+    "has_feasible_incumbent": true,
+    "grouped_incumbent_objective": [
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22
+    ],
+    "grouped_incumbent_runtime_s": 1.0674355999999996
+  }
+}

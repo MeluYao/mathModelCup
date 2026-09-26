@@ -2,12 +2,12 @@
   "method": "integrated_milp",
   "solver_status": "FEASIBLE",
   "validation": "PASS",
-  "runtime_s": 11.739407,
+  "runtime_s": 3.1949018000000002,
   "objective": {
-    "normalized_weighted_delivery_time": 1.0945607061728408,
-    "makespan_s": 18824.583381460106,
-    "energy_kwh": 191.66702883602272,
-    "trip_count": 80
+    "normalized_weighted_delivery_time": 0.516328617103963,
+    "makespan_s": 9408.443943661947,
+    "energy_kwh": 64.83172808040707,
+    "trip_count": 22
   },
   "constraint_check": {
     "validation": "PASS",
@@ -19,14 +19,59 @@
     "aircraft_overlap_count": 0,
     "battery_overlap_count": 0,
     "energy_violation_count": 0,
-    "minimum_return_soc_percent": 30.14782029412183
+    "minimum_return_soc_percent": 21.46754357508445
   },
   "diagnostics": {
     "initialization": "independent_resource_aware",
+    "initial_trip_count": 18,
+    "accepted_repairs": 6,
+    "accepted_merges": 3,
+    "accepted_local_moves": 2,
+    "accepted_retypes": 1,
+    "best_local_seed": 20260925,
+    "grouped_quality": [
+      0.0,
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22.0,
+      15112.487545996846
+    ],
+    "incumbent_source": "provided_seed",
+    "reserve_ratio": 0.2,
+    "range_energy_fraction": 1.0,
+    "objective_order": "published",
     "backend": "OR-Tools CP-SAT restricted integrated model",
     "integrated_status": "UNKNOWN",
-    "incumbent_source": "integrated_primal_heuristic",
     "generated_candidate_count": 4244,
-    "candidate_count": 1200
+    "candidate_count": 1200,
+    "seed_candidate_count": 22,
+    "seed_hint_count": 22,
+    "lexicographic_phases_completed": 0,
+    "lexicographic_phase_statuses": {
+      "timing": "UNKNOWN"
+    },
+    "seed_objective": [
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22
+    ],
+    "seed_retained": true,
+    "native_improved_seed": false,
+    "native_candidate_objective": [
+      1.0945607061728408,
+      18824.583381460106,
+      191.66702883602272,
+      80
+    ],
+    "has_feasible_incumbent": true,
+    "grouped_incumbent_objective": [
+      0.516328617103963,
+      9408.443943661947,
+      64.83172808040707,
+      22
+    ],
+    "grouped_incumbent_runtime_s": 0.6065456000000005
   }
 }

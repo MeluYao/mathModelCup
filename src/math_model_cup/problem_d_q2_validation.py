@@ -58,6 +58,8 @@ def validate_q2_solution(
     arcs: Mapping[Tuple[str, str], ArcGeometry],
     solution: Q2Solution,
     reserve_ratio: float = 0.20,
+    *,
+    range_energy_fraction: float = 1.0,
 ) -> ValidationReport:
     issues: List[ValidationIssue] = []
     aircraft = {unit.aircraft_id: unit for unit in data.aircraft_units}
@@ -81,6 +83,7 @@ def validate_q2_solution(
                 arcs,
                 TripDraft(trip.plan.model_id, trip.plan.stops),
                 reserve_ratio,
+                range_energy_fraction=range_energy_fraction,
             )
         except Exception as error:
             issues.append(ValidationIssue("trip_infeasible", str(error), trip.trip_id))

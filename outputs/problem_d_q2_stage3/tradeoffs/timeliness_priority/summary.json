@@ -1,0 +1,44 @@
+{
+  "method": "timeliness_priority",
+  "solver_status": "FEASIBLE",
+  "validation": "PASS",
+  "runtime_s": 0.9907531999999994,
+  "objective": {
+    "normalized_weighted_delivery_time": 0.5448900814381064,
+    "makespan_s": 8736.430985097273,
+    "energy_kwh": 62.921054181989625,
+    "trip_count": 22
+  },
+  "constraint_check": {
+    "validation": "PASS",
+    "required_box_count": 80,
+    "delivered_box_count": 80,
+    "missing_box_count": 0,
+    "duplicate_box_count": 0,
+    "hard_deadline_violation_count": 0,
+    "aircraft_overlap_count": 0,
+    "battery_overlap_count": 0,
+    "energy_violation_count": 0,
+    "minimum_return_soc_percent": 20.949278300924455
+  },
+  "diagnostics": {
+    "initialization": "pure_ffd_then_tardiness_repair",
+    "initial_trip_count": 18,
+    "accepted_repairs": 6,
+    "accepted_merges": 2,
+    "accepted_local_moves": 1,
+    "accepted_retypes": 0,
+    "best_local_seed": 20260925,
+    "grouped_quality": [
+      0.0,
+      0.0,
+      8736.430985097273,
+      62.921054181989625,
+      22.0,
+      0.5448900814381064
+    ],
+    "incumbent_source": "grouped_local_search",
+    "reserve_ratio": 0.2,
+    "objective_order": "timeliness"
+  }
+}

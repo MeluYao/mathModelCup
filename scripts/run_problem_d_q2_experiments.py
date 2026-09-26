@@ -44,6 +44,10 @@ def parse_args() -> argparse.Namespace:
 
 def _write_summary(output_dir: Path, repetitions, sensitivity, figure_count: int) -> None:
     feasible_sensitivity = sensitivity[sensitivity["feasible"]]
+    no_solution_count = int(
+        (sensitivity["status"] == "NO_FEASIBLE_SOLUTION_FOUND").sum()
+    )
+    solver_error_count = int((sensitivity["status"] == "SOLVER_ERROR").sum())
     lines = [
         "# D题第二问阶段三实验摘要",
         "",
@@ -59,7 +63,8 @@ def _write_summary(output_dir: Path, repetitions, sensitivity, figure_count: int
         "",
         f"- 场景数：{len(sensitivity)}",
         f"- 可行场景数：{len(feasible_sensitivity)}",
-        f"- 不可行场景数：{len(sensitivity) - len(feasible_sensitivity)}",
+        f"- 未找到可行解场景数：{no_solution_count}",
+        f"- 求解错误场景数：{solver_error_count}",
         "",
         "## 图表",
         "",

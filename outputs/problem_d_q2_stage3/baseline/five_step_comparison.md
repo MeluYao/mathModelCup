@@ -6,7 +6,7 @@
 
 ## Step 2：四个独立求解器
 
-一体化模型、候选架次法和 ALNS 不读取其他纯方法的最终解；混合算法按定义调用候选法与 ALNS。`own_incumbent=true` 表示结果不是异常回退。
+四种方法接收同一个高质量可行种子，并在各自原生流程中独立改进；不存在求解结束后的共享解覆盖。`own_incumbent=true` 表示该方法严格改进了共同种子。
 
 ## Step 3：统一计算预算
 
@@ -18,6 +18,6 @@
 
 ## Step 5：Pareto 与推荐
 
-Pareto 非支配方法：integrated_milp、candidate、alns、hybrid。按冻结的词典序及同目标耗时规则，推荐 `candidate`。
+Pareto 非支配方法：integrated_milp、candidate、alns、hybrid。按冻结的词典序及同目标耗时规则，推荐 `alns`。
 
 完整数值见 `method_comparison.csv`；推荐仅对本次预算与参数有效。

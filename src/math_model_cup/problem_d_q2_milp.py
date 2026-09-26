@@ -12,6 +12,7 @@ from ortools.sat.python import cp_model
 from .problem_d_q2 import InfeasibleQ2Error, Q2Data, Q2Solution, TripExecution
 from .problem_d_q2_candidates import generate_initial_candidates
 from .problem_d_q2_geometry import ArcGeometry
+from .problem_d_q2_incumbent import ensure_valid_initial_solution, finalize_seeded_solution
 from .problem_d_q2_physics import charge_time_s
 from .problem_d_q2_schedule import (
     _make_solution,
@@ -35,14 +36,36 @@ def solve_integrated_milp(
     time_limit_s: float = 1800.0,
     max_stops: int = 3,
     max_candidates: int = 1_200,
+    *,
+    initial_solution: Q2Solution | None = None,
 ) -> Q2Solution:
     """Jointly select candidate routes and schedule both reusable resources."""
     started = perf_counter()
+    ensure_valid_initial_solution(data, arcs, initial_solution)
     generated_candidates = generate_initial_candidates(data, arcs, max_stops=max_stops)
-    mandatory = [candidate for candidate in generated_candidates if len(candidate.box_ids) == 1]
-    optional = [candidate for candidate in generated_candidates if len(candidate.box_ids) != 1]
+    seed_executions = {
+        trip.plan.signature: trip for trip in (initial_solution.trips if initial_solution else ())
+    }
+    all_candidates = {candidate.signature: candidate for candidate in generated_candidates}
+    for signature, execution in seed_executions.items():
+        all_candidates[signature] = execution.plan
+    mandatory = [candidate for candidate in all_candidates.values() if len(candidate.box_ids) == 1]
+    seed_optional = [
+        execution.plan
+        for execution in seed_executions.values()
+        if len(execution.plan.box_ids) != 1
+    ]
+    seed_signatures = set(seed_executions)
+    optional = [
+        candidate
+        for candidate in all_candidates.values()
+        if len(candidate.box_ids) != 1 and candidate.signature not in seed_signatures
+    ]
     optional.sort(key=lambda candidate: _integrated_candidate_key(data, candidate))
-    candidates = tuple(mandatory + optional[: max(0, max_candidates - len(mandatory))])
+    protected = mandatory + seed_optional
+    candidates = tuple(
+        protected + optional[: max(0, max_candidates - len(protected))]
+    )
     bootstrap = construct_resource_aware_boxwise_solution(
         data, candidates, "integrated_milp"
     )
@@ -153,6 +176,17 @@ def solve_integrated_milp(
         if intervals:
             model.add_no_overlap(intervals)
 
+    for index, candidate in enumerate(candidates):
+        execution = seed_executions.get(candidate.signature)
+        model.add_hint(selected[index], int(execution is not None))
+        if execution is None:
+            continue
+        model.add_hint(starts[index], max(0, int(round(execution.start_time_s))))
+        for aircraft_id, variable in aircraft_assignments[index].items():
+            model.add_hint(variable, int(aircraft_id == execution.aircraft_id))
+        for battery_id, variable in battery_assignments[index].items():
+            model.add_hint(variable, int(battery_id == execution.battery_id))
+
     makespan = model.new_int_var(0, horizon, "makespan")
     model.add_max_equality(makespan, ends)
     timing_terms = []
@@ -181,49 +215,83 @@ def solve_integrated_milp(
         )
         timing_terms.append(start_weight * starts[index] + internal * selected[index])
         energy_terms.append(int(round(candidate.energy_kwh * 1000)) * selected[index])
-    model.minimize(
-        sum(timing_terms) * 1_000_000
-        + makespan * 10_000
-        + sum(energy_terms) * 10
-        + sum(selected)
-    )
-
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = float(time_limit_s)
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
-    status = solver.solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    phase_objectives = (
+        ("timing", sum(timing_terms)),
+        ("makespan", makespan),
+        ("energy", sum(energy_terms)),
+        ("trip_count", sum(selected)),
+    )
+    phase_statuses: dict[str, str] = {}
+    phase_values: dict[str, int] = {}
+    snapshot: list[tuple[int, float, str, str]] | None = None
+    status = cp_model.UNKNOWN
+    solve_started = perf_counter()
+    battery_by_id = {battery.battery_id: battery for battery in data.batteries}
+
+    for phase_index, (phase_name, expression) in enumerate(phase_objectives):
+        remaining = max(0.01, float(time_limit_s) - (perf_counter() - solve_started))
+        phases_left = len(phase_objectives) - phase_index
+        solver.parameters.max_time_in_seconds = max(0.01, remaining / phases_left)
+        model.minimize(expression)
+        phase_status = solver.solve(model)
+        phase_statuses[phase_name] = solver.status_name(phase_status)
+        if phase_status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            break
+        status = phase_status
+        phase_value = int(solver.value(expression))
+        phase_values[phase_name] = phase_value
+        snapshot = []
+        for index, candidate in enumerate(candidates):
+            if not solver.value(selected[index]):
+                continue
+            aircraft_id = next(
+                key
+                for key, variable in aircraft_assignments[index].items()
+                if solver.value(variable)
+            )
+            battery_id = next(
+                key
+                for key, variable in battery_assignments[index].items()
+                if solver.value(variable)
+            )
+            snapshot.append(
+                (index, float(solver.value(starts[index])), aircraft_id, battery_id)
+            )
+        if phase_index + 1 < len(phase_objectives):
+            model.add(expression == phase_value)
+
+    if snapshot is None:
         diagnostics = dict(bootstrap.diagnostics)
         diagnostics.update({
             "backend": "OR-Tools CP-SAT restricted integrated model",
-            "integrated_status": solver.status_name(status),
+            "integrated_status": phase_statuses.get("timing", "NOT_RUN"),
             "incumbent_source": "integrated_primal_heuristic",
             "generated_candidate_count": len(generated_candidates),
             "candidate_count": len(candidates),
         })
-        return replace(
+        return finalize_seeded_solution(
+            "integrated_milp",
             bootstrap,
-            method="integrated_milp",
-            runtime_s=perf_counter() - started,
-            solver_status="FEASIBLE",
-            diagnostics=diagnostics,
+            initial_solution,
+            started=started,
+            native_source="integrated_primal_heuristic",
+            diagnostics={
+                **diagnostics,
+                "seed_candidate_count": len(seed_executions),
+                "seed_hint_count": len(seed_executions),
+                "lexicographic_phases_completed": 0,
+                "lexicographic_phase_statuses": phase_statuses,
+            },
         )
 
-    battery_by_id = {battery.battery_id: battery for battery in data.batteries}
     executions = []
-    trip_number = 0
-    for index, candidate in enumerate(candidates):
-        if not solver.value(selected[index]):
-            continue
-        trip_number += 1
-        start_time = float(solver.value(starts[index]))
-        aircraft_id = next(
-            key for key, variable in aircraft_assignments[index].items() if solver.value(variable)
-        )
-        battery_id = next(
-            key for key, variable in battery_assignments[index].items() if solver.value(variable)
-        )
+    for trip_number, (index, start_time, aircraft_id, battery_id) in enumerate(
+        snapshot, start=1
+    ):
+        candidate = candidates[index]
         return_time = start_time + candidate.duration_s
         battery_ready = return_time + charge_time_s(
             candidate.return_soc_percent / 100.0,
@@ -245,13 +313,30 @@ def solve_integrated_milp(
         "integrated_milp",
         executions,
         perf_counter() - started,
-        "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE",
+        (
+            "OPTIMAL"
+            if len(phase_values) == len(phase_objectives)
+            and all(value == "OPTIMAL" for value in phase_statuses.values())
+            else "FEASIBLE"
+        ),
         diagnostics={
             "backend": "OR-Tools CP-SAT restricted integrated model",
             "candidate_count": len(candidates),
             "generated_candidate_count": len(generated_candidates),
-            "objective_bound": solver.best_objective_bound,
-            "solver_objective": solver.objective_value,
+            "lexicographic_phases_completed": len(phase_values),
+            "lexicographic_phase_statuses": phase_statuses,
+            "lexicographic_phase_values": phase_values,
         },
     )
-    return solution
+    return finalize_seeded_solution(
+        "integrated_milp",
+        solution,
+        initial_solution,
+        started=started,
+        native_source="integrated_cp_sat",
+        diagnostics={
+            **solution.diagnostics,
+            "seed_candidate_count": len(seed_executions),
+            "seed_hint_count": len(seed_executions),
+        },
+    )

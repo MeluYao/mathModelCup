@@ -1,6 +1,6 @@
 {
   "problem_dir": "D:\\MProject\\mathModelCup\\D题",
-  "output_dir": "C:\\Users\\Yao Baoxian\\.codex\\worktrees\\d2-four-solvers-mvp\\mathModelCup\\outputs\\problem_d_q2_stage3",
+  "output_dir": "D:\\MProject\\mathModelCup\\outputs\\problem_d_q2_stage3",
   "methods": [
     "integrated_milp",
     "candidate",

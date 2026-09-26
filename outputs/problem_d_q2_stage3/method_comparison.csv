@@ -1,0 +1,5 @@
+﻿method,validation,solver_status,normalized_weighted_delivery_time,makespan_s,energy_kwh,trip_count,runtime_s,delivered_box_count,minimum_return_soc_percent,fallback,backend,seed_retained,native_improved_seed,has_feasible_incumbent,incumbent_source,own_incumbent,pareto_nondominated,lexicographic_rank
+integrated_milp,PASS,FEASIBLE,0.516328617103963,9408.443943661947,64.83172808040707,22,8.434124200000001,80,21.46754357508445,,OR-Tools CP-SAT restricted integrated model,True,False,True,provided_seed,False,True,4
+candidate,PASS,FEASIBLE,0.516328617103963,9408.443943661947,64.83172808040707,22,5.821643999999999,80,21.46754357508445,,,True,False,True,provided_seed,False,True,3
+alns,PASS,FEASIBLE,0.516328617103963,9408.443943661947,64.83172808040707,22,2.8645879,80,21.46754357508445,,,True,False,True,provided_seed,False,True,2
+hybrid,PASS,FEASIBLE,0.5158908995531455,9534.345058907296,69.52235221186811,24,7.408925899999996,80,21.46754357508445,,,False,True,True,hybrid_search,True,True,1

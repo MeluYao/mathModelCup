@@ -11,6 +11,7 @@ from typing import Dict, Mapping, Sequence, Tuple
 from .problem_d_q2 import InfeasibleQ2Error, Q2Data, Q2Solution, TripDraft, TripPlan, TripStop
 from .problem_d_q2_candidates import generate_initial_candidates
 from .problem_d_q2_geometry import ArcGeometry
+from .problem_d_q2_incumbent import ensure_valid_initial_solution, finalize_seeded_solution
 from .problem_d_q2_physics import evaluate_trip
 from .problem_d_q2_schedule import (
     construct_resource_aware_boxwise_solution,
@@ -222,6 +223,24 @@ def _update_weight(
         uses[name] = 0
 
 
+def _accept_candidate(
+    current: Q2Solution,
+    candidate: Q2Solution,
+    temperature: float,
+    random_draw,
+) -> bool:
+    """Use lexicographic dominance first and anneal only the first worse level."""
+    if candidate.objective <= current.objective:
+        return True
+    for current_value, candidate_value in zip(current.objective, candidate.objective):
+        if candidate_value == current_value:
+            continue
+        scale = max(1.0, abs(float(current_value)))
+        delta = (float(candidate_value) - float(current_value)) / scale
+        return random_draw() < exp(-delta / max(temperature, 1e-12))
+    return True
+
+
 def solve_alns(
     data: Q2Data,
     arcs: Mapping[Tuple[str, str], ArcGeometry],
@@ -234,6 +253,7 @@ def solve_alns(
 ) -> Q2Solution:
     """Run destroy/repair ALNS with deterministic resource decoding."""
     started = perf_counter()
+    ensure_valid_initial_solution(data, arcs, initial_solution)
     rng = Random(seed)
     initial_candidates = (
         tuple(candidate_pool)
@@ -266,6 +286,7 @@ def solve_alns(
     improving = 0
     feasible_moves = 0
     repair_feasibility_fallbacks = 0
+    rejected_infeasible_moves = 0
     restarts = 0
     no_improvement = 0
     history = [(0, best.objective)]
@@ -300,17 +321,18 @@ def solve_alns(
                 min(single_plans[box_id], key=lambda plan: _plan_proxy_cost(data, plan))
                 for box_id in removed
             ]
+            repair_feasibility_fallbacks += 1
             try:
                 candidate = schedule_trips_greedy(data, safe_repair, method="alns")
-                repair_feasibility_fallbacks += 1
             except InfeasibleQ2Error:
-                candidate = independent_base
-                repair_feasibility_fallbacks += 1
+                rejected_infeasible_moves += 1
+                no_improvement += 1
+                continue
         feasible_moves += 1
         fraction = iteration / max(1, iterations)
         temperature = initial_temperature * (0.001 ** fraction)
         delta = _annealing_score(candidate) - _annealing_score(current)
-        accepted_move = delta <= 0.0 or rng.random() < exp(-delta / max(temperature, 1e-12))
+        accepted_move = _accept_candidate(current, candidate, temperature, rng.random)
         reward = 0.0
         if accepted_move:
             current = candidate
@@ -348,6 +370,7 @@ def solve_alns(
             "iterations_requested": iterations,
             "feasible_moves": feasible_moves,
             "repair_feasibility_fallbacks": repair_feasibility_fallbacks,
+            "rejected_infeasible_moves": rejected_infeasible_moves,
             "accepted_moves": accepted,
             "improving_moves": improving,
             "restarts": restarts,
@@ -357,10 +380,11 @@ def solve_alns(
             "initialization": initialization,
         }
     )
-    return replace(
+    return finalize_seeded_solution(
+        "alns",
         best,
-        method="alns",
-        runtime_s=perf_counter() - started,
-        solver_status="FEASIBLE",
+        initial_solution,
+        started=started,
+        native_source="alns_search",
         diagnostics=diagnostics,
     )

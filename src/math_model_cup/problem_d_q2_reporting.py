@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence, Tuple
 
@@ -12,7 +13,9 @@ from .problem_d_q2 import Q2Data, Q2Solution, load_q2_data
 from .problem_d_q2_alns import solve_alns
 from .problem_d_q2_candidates import solve_candidate_method
 from .problem_d_q2_geometry import ArcGeometry, build_arc_matrix
+from .problem_d_q2_grouped import solve_grouped_local_search
 from .problem_d_q2_hybrid import solve_hybrid
+from .problem_d_q2_incumbent import ensure_valid_initial_solution
 from .problem_d_q2_milp import solve_integrated_milp
 from .problem_d_q2_validation import ValidationReport, validate_q2_solution
 
@@ -139,6 +142,14 @@ def _comparison_row(
     report: ValidationReport,
 ) -> dict[str, object]:
     checks = _constraint_row(data, solution, report)
+    has_seed = solution.diagnostics.get("seed_objective") is not None
+    seed_retained = bool(solution.diagnostics.get("seed_retained", False))
+    native_improved_seed = bool(
+        solution.diagnostics.get("native_improved_seed", False)
+    )
+    has_feasible_incumbent = bool(
+        solution.diagnostics.get("has_feasible_incumbent", report.is_valid)
+    )
     return {
         "method": method,
         "validation": checks["validation"],
@@ -152,7 +163,15 @@ def _comparison_row(
         "minimum_return_soc_percent": checks["minimum_return_soc_percent"],
         "fallback": solution.diagnostics.get("fallback", ""),
         "backend": solution.diagnostics.get("backend", ""),
-        "own_incumbent": not bool(solution.diagnostics.get("fallback")),
+        "seed_retained": seed_retained,
+        "native_improved_seed": native_improved_seed,
+        "has_feasible_incumbent": has_feasible_incumbent,
+        "incumbent_source": solution.diagnostics.get("incumbent_source", ""),
+        "own_incumbent": (
+            native_improved_seed
+            if has_seed
+            else not bool(solution.diagnostics.get("fallback"))
+        ),
     }
 
 
@@ -199,12 +218,12 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
         best_objective = min(objectives.values())
         best_methods = [method for method, value in objectives.items() if value == best_objective]
         best_rows = valid[valid["method"].isin(best_methods)]
-        own_incumbents = best_rows[best_rows["fallback"].fillna("") == ""]
+        own_incumbents = best_rows[best_rows["own_incumbent"]]
         if own_incumbents.empty:
             fastest = best_rows.sort_values("runtime_s").iloc[0]["method"]
             recommendation = (
-                "当前最佳目标对应的入口均来自回退解，尚不能据此判定四种算法的寻优优劣。"
-                f"若只考虑阶段一保底运行时间，{fastest} 最短；正式推荐需等待阶段二独立解。"
+                "当前最佳目标均保留共同种子，尚无算法严格改进该上界。"
+                f"若按保留种子后的原生运行时间，{fastest} 最短；相同终值不构成全局最优证明。"
             )
         else:
             fastest = own_incumbents.sort_values("runtime_s").iloc[0]["method"]
@@ -222,6 +241,9 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
             "energy_kwh",
             "trip_count",
             "runtime_s",
+            "incumbent_source",
+            "seed_retained",
+            "native_improved_seed",
             "fallback",
         ]
     ]
@@ -237,7 +259,7 @@ def _summary_markdown(comparison: pd.DataFrame, solutions: Mapping[str, Q2Soluti
             "",
             table,
             "",
-            "说明：比较仅在通过独立约束校验的方案之间进行；fallback 非空表示该方法本轮未获得自己的可行 incumbent。",
+            "说明：共同种子在各算法内部参与搜索；seed_retained=true 表示原生搜索未严格改进种子，不再进行报告层结果覆盖。",
             "",
         ]
     )
@@ -267,7 +289,7 @@ def _five_step_markdown(comparison: pd.DataFrame) -> str:
             "",
             "## Step 2：四个独立求解器",
             "",
-            "一体化模型、候选架次法和 ALNS 不读取其他纯方法的最终解；混合算法按定义调用候选法与 ALNS。`own_incumbent=true` 表示结果不是异常回退。",
+            "四种方法接收同一个高质量可行种子，并在各自原生流程中独立改进；不存在求解结束后的共享解覆盖。`own_incumbent=true` 表示该方法严格改进了共同种子。",
             "",
             "## Step 3：统一计算预算",
             "",
@@ -380,14 +402,39 @@ def run_methods(
     data = load_q2_data(Path(problem_dir))
     arcs = build_arc_matrix(data)
     effective_limit = min(float(time_limit_s), 10.0) if quick else float(time_limit_s)
+    grouped_incumbent = solve_grouped_local_search(
+        data,
+        arcs,
+        seed=seed,
+        iterations=200 if quick else 1_500,
+        method="grouped_local_search",
+        objective_order="published",
+    )
+    ensure_valid_initial_solution(data, arcs, grouped_incumbent)
     solutions: dict[str, Q2Solution] = {}
     for method in methods:
         if method == "integrated_milp":
-            solution = solve_integrated_milp(data, arcs, time_limit_s=effective_limit)
+            solution = solve_integrated_milp(
+                data,
+                arcs,
+                time_limit_s=effective_limit,
+                initial_solution=grouped_incumbent,
+            )
         elif method == "candidate":
-            solution = solve_candidate_method(data, arcs, time_limit_s=effective_limit)
+            solution = solve_candidate_method(
+                data,
+                arcs,
+                time_limit_s=effective_limit,
+                initial_solution=grouped_incumbent,
+            )
         elif method == "alns":
-            solution = solve_alns(data, arcs, seed=seed, iterations=20 if quick else 10_000)
+            solution = solve_alns(
+                data,
+                arcs,
+                seed=seed,
+                iterations=20 if quick else 10_000,
+                initial_solution=grouped_incumbent,
+            )
         else:
             solution = solve_hybrid(
                 data,
@@ -396,7 +443,16 @@ def run_methods(
                 iterations=10 if quick else 10_000,
                 rounds=1 if quick else 2,
                 time_limit_s=effective_limit,
+                initial_solution=grouped_incumbent,
             )
+        diagnostics = dict(solution.diagnostics)
+        diagnostics.update(
+            {
+                "grouped_incumbent_objective": grouped_incumbent.objective,
+                "grouped_incumbent_runtime_s": grouped_incumbent.runtime_s,
+            }
+        )
+        solution = replace(solution, diagnostics=diagnostics)
         report = validate_q2_solution(data, arcs, solution)
         if not report.is_valid:
             details = "; ".join(f"{issue.code}: {issue.message}" for issue in report.issues)

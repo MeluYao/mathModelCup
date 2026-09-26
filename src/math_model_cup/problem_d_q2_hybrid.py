@@ -10,6 +10,11 @@ from .problem_d_q2 import Q2Data, Q2Solution, TripPlan
 from .problem_d_q2_alns import solve_alns
 from .problem_d_q2_candidates import generate_initial_candidates, solve_candidate_method
 from .problem_d_q2_geometry import ArcGeometry
+from .problem_d_q2_incumbent import (
+    ensure_valid_initial_solution,
+    finalize_seeded_solution,
+    solution_key,
+)
 
 
 def solve_hybrid(
@@ -19,15 +24,25 @@ def solve_hybrid(
     iterations: int = 10_000,
     rounds: int = 2,
     time_limit_s: float = 30.0,
+    *,
+    initial_solution: Q2Solution | None = None,
 ) -> Q2Solution:
     started = perf_counter()
+    ensure_valid_initial_solution(data, arcs, initial_solution)
     if rounds < 1:
         raise ValueError("rounds must be at least one")
     pool: Dict[Tuple[object, ...], TripPlan] = {
         plan.signature: plan for plan in generate_initial_candidates(data, arcs)
     }
+    if initial_solution is not None:
+        for trip in initial_solution.trips:
+            pool[trip.plan.signature] = trip.plan
     current = solve_candidate_method(
-        data, arcs, time_limit_s=time_limit_s, candidates=tuple(pool.values())
+        data,
+        arcs,
+        time_limit_s=time_limit_s,
+        candidates=tuple(pool.values()),
+        initial_solution=initial_solution,
     )
     objective_history = [current.objective]
     for round_index in range(rounds):
@@ -46,8 +61,9 @@ def solve_hybrid(
             arcs,
             time_limit_s=time_limit_s,
             candidates=tuple(pool.values()),
+            initial_solution=current,
         )
-        current = min((current, improved, refreshed), key=lambda solution: solution.objective)
+        current = min((current, improved, refreshed), key=solution_key)
         objective_history.append(current.objective)
 
     diagnostics = dict(current.diagnostics)
@@ -61,9 +77,11 @@ def solve_hybrid(
             "objective_history": objective_history,
         }
     )
-    return replace(
+    return finalize_seeded_solution(
+        "hybrid",
         current,
-        method="hybrid",
-        runtime_s=perf_counter() - started,
+        initial_solution,
+        started=started,
+        native_source="hybrid_search",
         diagnostics=diagnostics,
     )

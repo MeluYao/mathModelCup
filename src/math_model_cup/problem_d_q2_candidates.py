@@ -21,6 +21,11 @@ from .problem_d_q2 import (
     TripStop,
 )
 from .problem_d_q2_geometry import ArcGeometry
+from .problem_d_q2_incumbent import (
+    ensure_valid_initial_solution,
+    finalize_seeded_solution,
+    solution_key,
+)
 from .problem_d_q2_physics import evaluate_trip
 from .problem_d_q2_schedule import (
     construct_resource_aware_boxwise_solution,
@@ -332,12 +337,32 @@ def solve_candidate_method(
     time_limit_s: float = 300.0,
     *,
     candidates: Sequence[TripPlan] | None = None,
+    initial_solution: Q2Solution | None = None,
 ) -> Q2Solution:
     started = perf_counter()
-    pool = tuple(candidates) if candidates is not None else generate_initial_candidates(data, arcs)
+    ensure_valid_initial_solution(data, arcs, initial_solution)
+    generated = (
+        tuple(candidates)
+        if candidates is not None
+        else generate_initial_candidates(data, arcs)
+    )
+    seed_plans = (
+        tuple(trip.plan for trip in initial_solution.trips)
+        if initial_solution is not None
+        else ()
+    )
+    pool_by_signature = {plan.signature: plan for plan in generated}
+    for plan in seed_plans:
+        pool_by_signature[plan.signature] = plan
+    pool = tuple(pool_by_signature.values())
     if not pool:
         raise InfeasibleQ2Error("candidate pool is empty")
-    incumbent = _resource_aware_incumbent(data, pool, started=started)
+    try:
+        bootstrap = _resource_aware_incumbent(data, pool, started=started)
+    except InfeasibleQ2Error:
+        if initial_solution is None:
+            raise
+        bootstrap = replace(initial_solution, method="candidate")
     cuts: List[Tuple[int, ...]] = []
     last_error = ""
     for iteration in range(10):
@@ -371,28 +396,28 @@ def solve_candidate_method(
             runtime_s=perf_counter() - started,
             diagnostics=diagnostics,
         )
-        if exact.objective < incumbent.objective:
-            return exact
-        return _resource_aware_incumbent(
-            data,
-            pool,
+        native = exact if solution_key(exact) < solution_key(bootstrap) else bootstrap
+        return finalize_seeded_solution(
+            "candidate",
+            native,
+            initial_solution,
             started=started,
+            native_source="candidate_search",
             diagnostics={
-                "selected_candidate_count": len(selected),
-                "set_partition_status": int(result.status),
-                "set_partition_message": result.message,
-                "set_partition_objective": float(result.fun),
-                "no_good_cut_count": len(cuts),
-                "incumbent_source": "resource_aware_bootstrap",
+                **diagnostics,
+                "seed_candidate_count": len(seed_plans),
             },
         )
-    return _resource_aware_incumbent(
-        data,
-        pool,
+    return finalize_seeded_solution(
+        "candidate",
+        bootstrap,
+        initial_solution,
         started=started,
+        native_source="candidate_search",
         diagnostics={
+            "candidate_count": len(pool),
+            "seed_candidate_count": len(seed_plans),
             "no_good_cut_count": len(cuts),
-            "incumbent_source": "resource_aware_bootstrap",
             "exact_search_failure": last_error,
         },
     )

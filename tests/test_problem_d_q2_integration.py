@@ -42,6 +42,9 @@ def test_reporting_writes_submission_source_tables(tmp_path, schedule_case) -> N
     assert comparison.loc[0, "validation"] == "PASS"
     assert comparison.loc[0, "delivered_box_count"] == len(data.boxes)
     assert bool(comparison.loc[0, "pareto_nondominated"])
+    assert "seed_retained" in comparison.columns
+    assert "native_improved_seed" in comparison.columns
+    assert "has_feasible_incumbent" in comparison.columns
     summary = json.loads((method_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["validation"] == "PASS"
     assert summary["objective"]["trip_count"] == len(solution.trips)
@@ -68,6 +71,19 @@ def test_real_data_all_four_methods_return_valid_solutions(tmp_path) -> None:
     assert len(data.boxes) == 80
     assert all(
         validate_q2_solution(data, arcs, solution).is_valid
+        for solution in solutions.values()
+    )
+    assert all(
+        solution.objective
+        <= tuple(solution.diagnostics["grouped_incumbent_objective"])
+        for solution in solutions.values()
+    )
+    assert all(
+        solution.diagnostics.get("grouped_incumbent_objective") is not None
+        for solution in solutions.values()
+    )
+    assert all(
+        solution.diagnostics.get("incumbent_source") != "shared_grouped_local_search"
         for solution in solutions.values()
     )
     assert all(not solution.diagnostics.get("fallback") for solution in solutions.values())

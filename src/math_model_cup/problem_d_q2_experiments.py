@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from math import ceil
 from pathlib import Path
+from time import sleep
 from typing import Mapping, Sequence, Tuple
 
 import matplotlib
@@ -14,10 +15,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .problem_d_q2 import Q2Data, Q2Solution, TripPlan
+from .problem_d_q2 import (
+    InfeasibleQ2Error,
+    Q2Data,
+    Q2Solution,
+    TripDraft,
+    TripExecution,
+    TripPlan,
+)
 from .problem_d_q2_alns import solve_alns
 from .problem_d_q2_geometry import ArcGeometry
-from .problem_d_q2_schedule import construct_resource_aware_boxwise_solution
+from .problem_d_q2_grouped import solve_grouped_local_search
+from .problem_d_q2_physics import charge_time_s, evaluate_trip
+from .problem_d_q2_schedule import _make_solution, schedule_trips_greedy
 from .problem_d_q2_validation import validate_q2_solution
 
 
@@ -75,6 +85,11 @@ def _solution_row(seed: int, solution: Q2Solution, valid: bool) -> dict[str, obj
         "feasible_moves": solution.diagnostics.get("feasible_moves", 0),
         "accepted_moves": solution.diagnostics.get("accepted_moves", 0),
         "improving_moves": solution.diagnostics.get("improving_moves", 0),
+        "incumbent_source": solution.diagnostics.get("incumbent_source", ""),
+        "seed_retained": bool(solution.diagnostics.get("seed_retained", False)),
+        "native_improved_seed": bool(
+            solution.diagnostics.get("native_improved_seed", False)
+        ),
     }
 
 
@@ -88,12 +103,21 @@ def run_alns_repetitions(
     """Run ALNS for fixed seeds and return summary and convergence observations."""
     rows = []
     convergence_rows = []
+    grouped_incumbent = solve_grouped_local_search(
+        data,
+        arcs,
+        seed=int(seeds[0]) if seeds else 0,
+        iterations=max(200, iterations),
+        method="grouped_local_search",
+        objective_order="published",
+    )
     for seed in seeds:
         solution = solve_alns(
             data,
             arcs,
             seed=int(seed),
             iterations=iterations,
+            initial_solution=grouped_incumbent,
             candidate_pool=candidate_pool,
         )
         report = validate_q2_solution(data, arcs, solution)
@@ -129,20 +153,142 @@ def _resource_subset(data: Q2Data, fraction: float) -> Q2Data:
     return replace(data, aircraft_units=tuple(aircraft), batteries=tuple(batteries))
 
 
+def _recalibrate_solution(
+    data: Q2Data,
+    arcs: Mapping[Tuple[str, str], ArcGeometry],
+    solution: Q2Solution,
+    *,
+    reserve_ratio: float,
+    range_energy_fraction: float,
+) -> Q2Solution:
+    """Recompute one incumbent under a new energy calibration without delaying it."""
+    batteries = {battery.battery_id: battery for battery in data.batteries}
+    executions = []
+    for trip in solution.trips:
+        plan = evaluate_trip(
+            data,
+            arcs,
+            TripDraft(trip.plan.model_id, trip.plan.stops),
+            reserve_ratio=reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+        )
+        return_time = trip.start_time_s + plan.duration_s
+        battery_ready = return_time + charge_time_s(
+            plan.return_soc_percent / 100.0,
+            batteries[trip.battery_id].full_charge_time_s,
+        )
+        executions.append(
+            TripExecution(
+                trip_id=trip.trip_id,
+                plan=plan,
+                aircraft_id=trip.aircraft_id,
+                battery_id=trip.battery_id,
+                start_time_s=trip.start_time_s,
+                return_time_s=return_time,
+                battery_ready_time_s=battery_ready,
+            )
+        )
+    preserved = _make_solution(
+        data,
+        method="sensitivity_recalibrated_seed",
+        executions=executions,
+        runtime_s=0.0,
+        solver_status="FEASIBLE",
+        diagnostics={"incumbent_source": "recalibrated_range_seed"},
+    )
+    candidates = [preserved]
+    try:
+        candidates.append(
+            schedule_trips_greedy(
+                data,
+                [execution.plan for execution in executions],
+                method="sensitivity_recalibrated_seed",
+            )
+        )
+    except InfeasibleQ2Error:
+        pass
+
+    valid_candidates = [
+        candidate
+        for candidate in candidates
+        if validate_q2_solution(
+            data,
+            arcs,
+            candidate,
+            reserve_ratio=reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+        ).is_valid
+    ]
+    if not valid_candidates:
+        raise InfeasibleQ2Error("recalibrated seed has no valid schedule")
+    return min(valid_candidates, key=lambda candidate: candidate.objective)
+
+
 def _sensitivity_result(
     factor: str,
     level: float,
     data: Q2Data,
     arcs: Mapping[Tuple[str, str], ArcGeometry],
     pool: Sequence[TripPlan],
+    reserve_ratio: float = 0.20,
+    range_energy_fraction: float = 1.0,
+    initial_solution: Q2Solution | None = None,
 ) -> dict[str, object]:
     try:
-        solution = construct_resource_aware_boxwise_solution(data, pool, "sensitivity")
-        report = validate_q2_solution(data, arcs, solution)
+        native = solve_grouped_local_search(
+            data,
+            arcs,
+            seed=20260924,
+            iterations=200,
+            method="sensitivity",
+            reserve_ratio=reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+            objective_order="published",
+        )
+        native_report = validate_q2_solution(
+            data,
+            arcs,
+            native,
+            reserve_ratio=reserve_ratio,
+            range_energy_fraction=range_energy_fraction,
+        )
+        candidates = []
+        if native_report.is_valid:
+            candidates.append((native.objective, "native_search", native))
+        if initial_solution is not None:
+            try:
+                recalibrated = _recalibrate_solution(
+                    data,
+                    arcs,
+                    initial_solution,
+                    reserve_ratio=reserve_ratio,
+                    range_energy_fraction=range_energy_fraction,
+                )
+                seed_report = validate_q2_solution(
+                    data,
+                    arcs,
+                    recalibrated,
+                    reserve_ratio=reserve_ratio,
+                    range_energy_fraction=range_energy_fraction,
+                )
+                if seed_report.is_valid:
+                    candidates.append(
+                        (
+                            recalibrated.objective,
+                            "recalibrated_range_seed",
+                            recalibrated,
+                        )
+                    )
+            except InfeasibleQ2Error:
+                pass
+        if not candidates:
+            raise RuntimeError("solver returned no independently valid solution")
+        _, incumbent_source, solution = min(candidates, key=lambda item: item[0])
         return {
             "factor": factor,
             "level": level,
-            "feasible": report.is_valid,
+            "feasible": True,
+            "status": "FEASIBLE",
             "objective_primary": solution.objective[0],
             "makespan_s": solution.objective[1],
             "energy_kwh": solution.objective[2],
@@ -150,22 +296,41 @@ def _sensitivity_result(
             "minimum_return_soc_percent": min(
                 trip.plan.return_soc_percent for trip in solution.trips
             ),
-            "candidate_count": len(pool),
-            "issue_count": len(report.issues),
+            "reference_candidate_count": len(pool),
+            "issue_count": 0,
+            "incumbent_source": incumbent_source,
             "error": "",
+        }
+    except InfeasibleQ2Error as error:
+        return {
+            "factor": factor,
+            "level": level,
+            "feasible": False,
+            "status": "NO_FEASIBLE_SOLUTION_FOUND",
+            "objective_primary": np.nan,
+            "makespan_s": np.nan,
+            "energy_kwh": np.nan,
+            "trip_count": np.nan,
+            "minimum_return_soc_percent": np.nan,
+            "reference_candidate_count": len(pool),
+            "issue_count": 1,
+            "incumbent_source": "",
+            "error": str(error),
         }
     except Exception as error:
         return {
             "factor": factor,
             "level": level,
             "feasible": False,
+            "status": "SOLVER_ERROR",
             "objective_primary": np.nan,
             "makespan_s": np.nan,
             "energy_kwh": np.nan,
             "trip_count": np.nan,
             "minimum_return_soc_percent": np.nan,
-            "candidate_count": len(pool),
+            "reference_candidate_count": len(pool),
             "issue_count": 1,
+            "incumbent_source": "",
             "error": str(error),
         }
 
@@ -175,7 +340,7 @@ def run_sensitivity_analysis(
     arcs: Mapping[Tuple[str, str], ArcGeometry],
     candidate_pool: Sequence[TripPlan],
 ) -> pd.DataFrame:
-    """Evaluate four operational sensitivity families with a common constructor."""
+    """Evaluate five operational sensitivity families with a common constructor."""
     rows = []
     for reserve_ratio in (0.15, 0.20, 0.25, 0.30, 0.35):
         pool = tuple(
@@ -184,7 +349,14 @@ def run_sensitivity_analysis(
             if plan.return_soc_percent + 1e-9 >= 100.0 * reserve_ratio
         )
         rows.append(
-            _sensitivity_result("reserve_ratio", reserve_ratio, data, arcs, pool)
+            _sensitivity_result(
+                "reserve_ratio",
+                reserve_ratio,
+                data,
+                arcs,
+                pool,
+                reserve_ratio=reserve_ratio,
+            )
         )
 
     for multiplier in (0.75, 1.00, 1.25):
@@ -233,6 +405,29 @@ def run_sensitivity_analysis(
                 "deadline_multiplier", multiplier, modified, arcs, candidate_pool
             )
         )
+
+    range_seed = solve_grouped_local_search(
+        data,
+        arcs,
+        seed=20260924,
+        iterations=200,
+        method="sensitivity_range_seed",
+        reserve_ratio=0.20,
+        range_energy_fraction=1.0,
+        objective_order="published",
+    )
+    for fraction in (0.80, 1.00):
+        rows.append(
+            _sensitivity_result(
+                "range_energy_fraction",
+                fraction,
+                data,
+                arcs,
+                candidate_pool,
+                range_energy_fraction=fraction,
+                initial_solution=range_seed,
+            )
+        )
     return pd.DataFrame(rows)
 
 
@@ -245,9 +440,18 @@ def _save_figure(
 ) -> list[Path]:
     paths = [output_dir / f"{stem}.png", output_dir / f"{stem}.pdf"]
     fig.tight_layout(rect=tight_rect)
-    fig.savefig(paths[0], dpi=300)
-    fig.savefig(paths[1])
-    plt.close(fig)
+    try:
+        for path, kwargs in ((paths[0], {"dpi": 300}), (paths[1], {})):
+            for attempt in range(3):
+                try:
+                    fig.savefig(path, **kwargs)
+                    break
+                except OSError:
+                    if attempt == 2:
+                        raise
+                    sleep(0.1)
+    finally:
+        plt.close(fig)
     return paths
 
 
@@ -356,15 +560,17 @@ def create_paper_figures(
     axes[1].set_title("ALNS runtime variation")
     created.extend(_save_figure(fig, output_dir, "fig04_alns_multiseed"))
 
-    fig, axes = plt.subplots(2, 2, figsize=(7.2, 5.4))
+    fig, axes = plt.subplots(3, 2, figsize=(7.2, 7.6))
     baseline_levels = {
         "reserve_ratio": 0.20,
         "charge_time_multiplier": 1.00,
         "resource_fraction": 1.00,
         "deadline_multiplier": 1.00,
+        "range_energy_fraction": 1.00,
     }
     legend_items = {}
-    for axis, (factor, group) in zip(axes.flat, sensitivity.groupby("factor", sort=True)):
+    grouped_sensitivity = list(sensitivity.groupby("factor", sort=True))
+    for axis, (factor, group) in zip(axes.flat, grouped_sensitivity):
         group = group.sort_values("level")
         feasible = group[group["feasible"]]
         if not feasible.empty:
@@ -387,15 +593,32 @@ def create_paper_figures(
                 label="Makespan",
                 color="#EE6677",
             )
-        infeasible = group[~group["feasible"]]
-        if not infeasible.empty:
-            axis.scatter(infeasible["level"], np.full(len(infeasible), 0.9), marker="x", color="#AA3377", label="Infeasible")
+        unresolved = group[group["status"] == "NO_FEASIBLE_SOLUTION_FOUND"]
+        if not unresolved.empty:
+            axis.scatter(
+                unresolved["level"],
+                np.full(len(unresolved), 0.9),
+                marker="x",
+                color="#AA3377",
+                label="No feasible solution found",
+            )
+        errors = group[group["status"] == "SOLVER_ERROR"]
+        if not errors.empty:
+            axis.scatter(
+                errors["level"],
+                np.full(len(errors), 0.85),
+                marker="X",
+                color="#222222",
+                label="Solver error",
+            )
         axis.axhline(1.0, color="0.4", linewidth=0.7, linestyle="--")
         axis.set_title(factor.replace("_", " ").title())
         axis.set_xlabel("Factor level")
         axis.set_ylabel("Normalized response")
         handles, legend_labels = axis.get_legend_handles_labels()
         legend_items.update(zip(legend_labels, handles))
+    for axis in list(axes.flat)[len(grouped_sensitivity) :]:
+        axis.set_visible(False)
     if legend_items:
         fig.legend(
             legend_items.values(),
