@@ -634,6 +634,270 @@ def reschedule_transport_with_state_grid(
     )
 
 
+def reschedule_transport_with_segment_state_grid(
+    data: Q3Data,
+    transport: Q2Solution,
+    communication_segments: Sequence[CommunicationSegment],
+    relay_states: Sequence[RelayState],
+    atlas: CoverageAtlas,
+    *,
+    hard_grid_step_s: float = 60.0,
+    soft_grid_step_s: float = 300.0,
+    occupancy_slot_s: float = 30.0,
+    soft_horizon_s: float = 30_000.0,
+    time_limit_s: float = 180.0,
+) -> Q2Solution:
+    """Choose transport starts and one covering relay state per dark segment."""
+    if min(hard_grid_step_s, soft_grid_step_s, occupancy_slot_s) <= 0.0:
+        raise ValueError("time-grid steps must be positive")
+    started = perf_counter()
+    scale = 10
+    hard_step = max(1, int(round(hard_grid_step_s * scale)))
+    soft_step = max(1, int(round(soft_grid_step_s * scale)))
+    occupancy_slot = max(1, int(round(occupancy_slot_s * scale)))
+    horizon = int(ceil((soft_horizon_s + 20_000.0) * scale))
+    dark_segments = tuple(
+        segment for segment in communication_segments if not segment.direct_available
+    )
+    dark_by_trip: dict[str, list[CommunicationSegment]] = {}
+    for segment in dark_segments:
+        dark_by_trip.setdefault(segment.transport_trip_id, []).append(segment)
+    state_by_id = {state.state_id: state for state in relay_states}
+    trip_by_id = {trip.trip_id: trip for trip in transport.trips}
+    battery_by_id = {
+        battery.battery_id: battery for battery in data.transport.batteries
+    }
+
+    model = cp_model.CpModel()
+    starts: dict[str, cp_model.IntVar] = {}
+    ends: dict[str, cp_model.IntVar] = {}
+    aircraft_intervals: dict[str, list[cp_model.IntervalVar]] = {
+        unit.aircraft_id: [] for unit in data.transport.aircraft_units
+    }
+    battery_intervals: dict[str, list[cp_model.IntervalVar]] = {
+        battery.battery_id: [] for battery in data.transport.batteries
+    }
+    start_choices: dict[str, tuple[tuple[int, cp_model.IntVar], ...]] = {}
+
+    for trip in transport.trips:
+        duration = int(ceil(trip.plan.duration_s * scale))
+        start = model.new_int_var(0, horizon, f"segment_start_{trip.trip_id}")
+        end = model.new_int_var(0, horizon, f"segment_end_{trip.trip_id}")
+        model.add(end == start + duration)
+        starts[trip.trip_id] = start
+        ends[trip.trip_id] = end
+        aircraft_intervals[trip.aircraft_id].append(
+            model.new_interval_var(
+                start, duration, end, f"segment_air_{trip.trip_id}"
+            )
+        )
+        battery = battery_by_id[trip.battery_id]
+        battery_duration = int(
+            ceil(
+                (
+                    trip.plan.duration_s
+                    + charge_time_s(
+                        trip.plan.return_soc_percent / 100.0,
+                        battery.full_charge_time_s,
+                    )
+                )
+                * scale
+            )
+        )
+        battery_end = model.new_int_var(
+            0, horizon, f"segment_battery_end_{trip.trip_id}"
+        )
+        model.add(battery_end == start + battery_duration)
+        battery_intervals[trip.battery_id].append(
+            model.new_interval_var(
+                start,
+                battery_duration,
+                battery_end,
+                f"segment_battery_{trip.trip_id}",
+            )
+        )
+        latest_start = min(
+            (
+                data.transport.boxes[box_id].hard_deadline_s
+                - trip.plan.delivery_offsets_s[box_id]
+                for box_id in trip.plan.box_ids
+                if data.transport.boxes[box_id].hard_deadline_s is not None
+            ),
+            default=None,
+        )
+        if latest_start is not None:
+            model.add(start <= floor(latest_start * scale + 1e-9))
+        if trip.trip_id not in dark_by_trip:
+            model.add_hint(start, int(ceil(trip.start_time_s * scale)))
+            continue
+        maximum_start = int(
+            floor(
+                (soft_horizon_s if latest_start is None else latest_start)
+                * scale
+                + 1e-9
+            )
+        )
+        step = soft_step if latest_start is None else hard_step
+        candidates = set(range(0, maximum_start + 1, step))
+        original_start = int(ceil(trip.start_time_s * scale))
+        candidates.update((original_start, original_start + 1, original_start + scale))
+        candidates = {value for value in candidates if 0 <= value <= maximum_start}
+        choices = tuple(
+            (candidate, model.new_bool_var(f"start_{trip.trip_id}_{candidate}"))
+            for candidate in sorted(candidates)
+        )
+        model.add_exactly_one(variable for _, variable in choices)
+        model.add(
+            start == sum(candidate * variable for candidate, variable in choices)
+        )
+        start_choices[trip.trip_id] = choices
+
+    for intervals in aircraft_intervals.values():
+        model.add_no_overlap(intervals)
+    for intervals in battery_intervals.values():
+        model.add_no_overlap(intervals)
+
+    occupancy: dict[tuple[str, int], list[cp_model.IntVar]] = {}
+    segment_choices: dict[
+        str, list[tuple[int, str, cp_model.IntVar]]
+    ] = {}
+    for segment in dark_segments:
+        trip = trip_by_id[segment.transport_trip_id]
+        valid_states = tuple(
+            state_id
+            for state_id in atlas.segment_to_states.get(segment.segment_id, ())
+            if state_id in state_by_id
+        )
+        if not valid_states:
+            raise InfeasibleQ2Error(
+                f"no selected relay state covers {segment.segment_id}"
+            )
+        start_offset = floor(
+            (segment.start_time_s - trip.start_time_s) * scale
+        )
+        end_offset = ceil((segment.end_time_s - trip.start_time_s) * scale)
+        assignments = []
+        for candidate_start, start_selected in start_choices[trip.trip_id]:
+            alternatives = []
+            for state_id in valid_states:
+                state = state_by_id[state_id]
+                assigned = model.new_bool_var(
+                    f"segment_{segment.segment_id}_{candidate_start}_{state_id}"
+                )
+                assignments.append((candidate_start, state_id, assigned))
+                alternatives.append(assigned)
+                lead = ceil(
+                    (
+                        data.relay_model.preparation_time_s
+                        + data.relay_model.link_setup_time_s
+                        + state.round_trip_time_s / 2.0
+                    )
+                    * scale
+                )
+                tail = ceil(
+                    (
+                        state.round_trip_time_s / 2.0
+                        + data.relay_model.turnaround_time_s
+                    )
+                    * scale
+                )
+                left = candidate_start + start_offset - lead
+                right = candidate_start + end_offset + tail
+                if left < 0:
+                    model.add(assigned == 0)
+                    continue
+                for slot in range(floor(left / occupancy_slot), ceil(right / occupancy_slot)):
+                    occupancy.setdefault((state_id, slot), []).append(assigned)
+            model.add(sum(alternatives) == start_selected)
+        segment_choices[segment.segment_id] = assignments
+
+    occupied_by_slot: dict[int, list[cp_model.IntVar]] = {}
+    for (state_id, slot), alternatives in occupancy.items():
+        occupied = model.new_bool_var(f"occupied_{state_id}_{slot}")
+        for variable in alternatives:
+            model.add(occupied >= variable)
+        model.add(occupied <= sum(alternatives))
+        occupied_by_slot.setdefault(slot, []).append(occupied)
+    for active_states in occupied_by_slot.values():
+        model.add(sum(active_states) <= len(data.relay_units))
+
+    makespan = model.new_int_var(0, horizon, "segment_makespan")
+    model.add_max_equality(makespan, tuple(ends.values()))
+    weighted_starts = []
+    for trip in transport.trips:
+        weight = max(
+            1,
+            int(
+                round(
+                    10_000
+                    * sum(
+                        data.transport.boxes[box_id].priority_weight
+                        / data.transport.boxes[box_id].expected_time_s
+                        for box_id in trip.plan.box_ids
+                    )
+                )
+            ),
+        )
+        weighted_starts.append(weight * starts[trip.trip_id])
+    model.minimize(sum(weighted_starts) * 10_000 + makespan)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = float(time_limit_s)
+    solver.parameters.num_search_workers = 8
+    solver.parameters.random_seed = 20260925
+    solver.parameters.stop_after_first_solution = True
+    status = solver.solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        raise InfeasibleQ2Error(
+            f"segment-state transport rescheduling failed: {solver.status_name(status)}"
+        )
+
+    executions = []
+    for trip in transport.trips:
+        start_time = solver.value(starts[trip.trip_id]) / scale
+        return_time = start_time + trip.plan.duration_s
+        battery = battery_by_id[trip.battery_id]
+        executions.append(
+            TripExecution(
+                trip.trip_id,
+                trip.plan,
+                trip.aircraft_id,
+                trip.battery_id,
+                start_time,
+                return_time,
+                return_time
+                + charge_time_s(
+                    trip.plan.return_soc_percent / 100.0,
+                    battery.full_charge_time_s,
+                ),
+            )
+        )
+    selected_states = {
+        segment_id: next(
+            state_id
+            for _, state_id, variable in choices
+            if solver.value(variable)
+        )
+        for segment_id, choices in segment_choices.items()
+    }
+    return _make_solution(
+        data.transport,
+        "q3_segment_state_grid",
+        executions,
+        perf_counter() - started,
+        "OPTIMAL" if status == cp_model.OPTIMAL else "FEASIBLE",
+        diagnostics={
+            "hard_grid_step_s": hard_grid_step_s,
+            "soft_grid_step_s": soft_grid_step_s,
+            "occupancy_slot_s": occupancy_slot_s,
+            "selected_relay_states_by_segment": selected_states,
+            "segment_state_assignment_count": sum(
+                len(choices) for choices in segment_choices.values()
+            ),
+        },
+    )
+
+
 def dominates(left: Q3Objective, right: Q3Objective) -> bool:
     left_values = left.as_tuple()
     right_values = right.as_tuple()

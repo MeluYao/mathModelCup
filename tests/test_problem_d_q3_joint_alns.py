@@ -18,6 +18,7 @@ from math_model_cup.problem_d_q3 import (
 from math_model_cup.problem_d_q3_joint_alns import (
     dominates,
     relay_batches_from_solution,
+    reschedule_transport_with_segment_state_grid,
     reschedule_transport_with_relay_batches,
     reschedule_transport_with_state_grid,
     schedule_hard_then_serial_soft,
@@ -143,3 +144,71 @@ def test_relay_batch_template_reschedules_fixed_routes(schedule_case) -> None:
     )
     assert validate_q2_solution(transport_data, arcs, gridded).is_valid
     assert gridded.diagnostics["selected_relay_states"]
+
+
+def test_segment_state_grid_allows_different_states_within_one_trip(
+    schedule_case,
+) -> None:
+    transport_data, arcs, plans = schedule_case
+    transport = schedule_trips_greedy(transport_data, plans, method="synthetic")
+    trip = transport.trips[0]
+    center = transport_data.nodes["O01"]
+    position = Position3D(
+        center.longitude, center.latitude, center.elevation_m + 100.0
+    )
+    segments = (
+        CommunicationSegment(
+            "D1", trip.trip_id, "cruise", 100.0, 120.0,
+            position, position, False, -1.0,
+        ),
+        CommunicationSegment(
+            "D2", trip.trip_id, "cruise", 140.0, 160.0,
+            position, position, False, -1.0,
+        ),
+    )
+    relay_model = RelayModel(
+        "R", 20.0, 10.0, 1.0, 10.0, 0.2, 0.0, 0.0, 0.0,
+        2.0, 2.0, 0.8, 0.5, 0.1, 300.0, 300.0,
+    )
+    data = Q3Data(
+        transport=transport_data,
+        relay_model=relay_model,
+        relay_units=(RelayUnit("R1", "R", "O01"),),
+        energy_units=(RelayEnergyUnit("E1", "R", 300.0),),
+        link_budget=None,
+    )
+    states = (
+        RelayState(
+            "RS1", center.longitude, center.latitude, center.elevation_m,
+            100.0, center.elevation_m + 100.0, True, 0.0, 0.1, 20.0,
+        ),
+        RelayState(
+            "RS2", center.longitude, center.latitude, center.elevation_m,
+            120.0, center.elevation_m + 120.0, True, 0.0, 0.1, 20.0,
+        ),
+    )
+    atlas = CoverageAtlas(
+        state_ids=("RS1", "RS2"),
+        segment_ids=("D1", "D2"),
+        state_masks={"RS1": 1, "RS2": 2},
+        segment_to_states={"D1": ("RS1",), "D2": ("RS2",)},
+    )
+
+    shifted = reschedule_transport_with_segment_state_grid(
+        data,
+        transport,
+        segments,
+        states,
+        atlas,
+        hard_grid_step_s=10.0,
+        soft_grid_step_s=10.0,
+        occupancy_slot_s=5.0,
+        soft_horizon_s=1000.0,
+        time_limit_s=5.0,
+    )
+
+    assert validate_q2_solution(transport_data, arcs, shifted).is_valid
+    assert shifted.diagnostics["selected_relay_states_by_segment"] == {
+        "D1": "RS1",
+        "D2": "RS2",
+    }
