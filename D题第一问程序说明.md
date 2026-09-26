@@ -28,7 +28,7 @@
 | `src/math_model_cup/problem_d_q1_reporting.py` | CSV、图表和分析材料生成 |
 | `src/math_model_cup/problem_d_q1_validation.py` | 与候选生成模块分离的独立物理校验 |
 | `tests/test_problem_d_q1*.py` | 基础模型、GIS、Pareto、余量、报告、Excel 和独立校验测试 |
-| `outputs/problem_d_q1/` | 默认输出目录；属于生成结果，不纳入 Git |
+| `outputs/problem_d_q1/` | 默认输出目录；最终交付结果纳入 Git，临时或调试输出不纳入 Git |
 
 ## 3. 输入文件
 

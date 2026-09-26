@@ -69,10 +69,10 @@ ALNS 在“架次集合 + 确定性资源解码”空间中使用随机移除、
 
 | 方法 | 校验 | $Z_1$ | 完工时间/s | 能耗/kWh | 架次 | 原生时间/s | 来源 | 是否改进种子 |
 |---|---:|---:|---:|---:|---:|---:|---|---:|
-| 受限一体化 CP-SAT | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 4.802 | `provided_seed` | 否 |
-| 候选架次法 | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 5.394 | `provided_seed` | 否 |
-| ALNS | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 2.745 | `provided_seed` | 否 |
-| 混合算法 | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 7.744 | `provided_seed` | 否 |
+| 受限一体化 CP-SAT | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 3.195 | `provided_seed` | 否 |
+| 候选架次法 | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 2.959 | `provided_seed` | 否 |
+| ALNS | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 1.553 | `provided_seed` | 否 |
+| 混合算法 | PASS | 0.516329 | 9408.44 | 64.8317 | 22 | 4.373 | `provided_seed` | 否 |
 
 四种方案都通过独立校验，并且全部在自身原生流程中保留种子。结果相同只说明本预算下四种方法都没有找到严格更优解，不再说明它们被报告程序改成相同。目标并列时 ALNS 运行时间最短，因此本轮工程推荐 ALNS；候选法和 CP-SAT仍分别承担可解释分层求解与精确模型对照的作用。
 
@@ -166,7 +166,7 @@ $$
 ```powershell
 python scripts/run_problem_d_q2.py `
   --problem-dir "D:\MProject\mathModelCup\D题" `
-  --output-dir "outputs\problem_d_q2_stage3" `
+  --output-dir "outputs\problem_d_q2_stage3\baseline" `
   --quick --time-limit 5
 
 python scripts/run_problem_d_q2_experiments.py `

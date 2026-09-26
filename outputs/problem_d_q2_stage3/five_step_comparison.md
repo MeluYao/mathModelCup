@@ -1,4 +1,6 @@
-# D题第二问阶段二五步比较
+# D题第二问历史五步比较（非共同发布解）
+
+> 本文件记录 2026-09-25 的历史搜索结果，其中 Hybrid 得到 24 架次方案。当前正式发布采用 `baseline/` 中的 22 架次共同发布解；本文件不作为最终推荐依据。
 
 ## Step 1：冻结统一评价规则
 
@@ -18,6 +20,6 @@
 
 ## Step 5：Pareto 与推荐
 
-Pareto 非支配方法：integrated_milp、candidate、alns、hybrid。按冻结的词典序及同目标耗时规则，推荐 `hybrid`。
+Pareto 非支配方法：integrated_milp、candidate、alns、hybrid。按冻结的词典序及同目标耗时规则，本次历史运行推荐 `hybrid`；正式推荐见 `baseline/five_step_comparison.md`。
 
 完整数值见 `method_comparison.csv`；推荐仅对本次预算与参数有效。
