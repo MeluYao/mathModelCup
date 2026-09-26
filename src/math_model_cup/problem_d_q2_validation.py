@@ -8,6 +8,13 @@ from typing import List, Mapping, Tuple
 from .problem_d_q2 import Q2Data, Q2Solution, TripDraft
 from .problem_d_q2_geometry import ArcGeometry
 from .problem_d_q2_physics import charge_time_s, evaluate_trip, objective_vector
+from .problem_d_q2_urgent import (
+    PUBLISHED_MODE,
+    URGENT_PRIORITY_MODE,
+    is_urgent_box,
+    required_deadline_s,
+    urgent_objective_vector,
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,7 @@ def validate_q2_solution(
     reserve_ratio: float = 0.20,
     *,
     range_energy_fraction: float = 1.0,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> ValidationReport:
     issues: List[ValidationIssue] = []
     aircraft = {unit.aircraft_id: unit for unit in data.aircraft_units}
@@ -125,15 +133,32 @@ def validate_q2_solution(
             issues.append(ValidationIssue("delivery_reference", "delivery reference mismatch", record.box_id))
         if abs(record.delivery_time_s - expected[2]) > 1e-6:
             issues.append(ValidationIssue("delivery_time", "delivery time mismatch", record.box_id))
-        deadline = data.boxes[record.box_id].hard_deadline_s
+        box = data.boxes[record.box_id]
+        if evaluation_mode == URGENT_PRIORITY_MODE:
+            deadline = required_deadline_s(box)
+        elif evaluation_mode == PUBLISHED_MODE:
+            deadline = box.hard_deadline_s
+        else:
+            raise ValueError(f"unknown Q2 evaluation mode: {evaluation_mode}")
         if deadline is not None and record.delivery_time_s > deadline + 1e-7:
-            issues.append(ValidationIssue("hard_deadline", "hard deadline violated", record.box_id))
+            code = (
+                "urgent_deadline"
+                if evaluation_mode == URGENT_PRIORITY_MODE and is_urgent_box(box)
+                else "normal_deadline"
+                if evaluation_mode == URGENT_PRIORITY_MODE
+                else "hard_deadline"
+            )
+            issues.append(ValidationIssue(code, "hard deadline violated", record.box_id))
 
     issues.extend(_overlap_issues(solution, "aircraft"))
     issues.extend(_overlap_issues(solution, "battery"))
 
     if solution.trips and not issues:
-        recomputed_objective = objective_vector(data, solution)
+        recomputed_objective = (
+            urgent_objective_vector(data, solution)
+            if evaluation_mode == URGENT_PRIORITY_MODE
+            else objective_vector(data, solution)
+        )
         if any(
             abs(float(left) - float(right)) > 1e-7
             for left, right in zip(recomputed_objective, solution.objective)

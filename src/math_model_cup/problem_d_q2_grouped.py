@@ -22,6 +22,13 @@ from .problem_d_q2_schedule import (
     construct_resource_aware_boxwise_solution,
     schedule_trips_greedy,
 )
+from .problem_d_q2_urgent import (
+    PUBLISHED_MODE,
+    URGENT_PRIORITY_MODE,
+    is_urgent_box,
+    required_deadline_s,
+    urgent_search_key,
+)
 
 
 def _best_plan(
@@ -138,6 +145,7 @@ def build_grouped_initial_plans(
     arcs: Mapping[Tuple[str, str], ArcGeometry],
     reserve_ratio: float = 0.20,
     range_energy_fraction: float = 1.0,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> tuple[TripPlan, ...]:
     """Build a resource-safe hard-deadline core plus FFD soft-demand trips."""
     singleton_candidates = []
@@ -162,11 +170,15 @@ def build_grouped_initial_plans(
         data,
         singleton_candidates,
         method="grouped_hard_core",
+        evaluation_mode=evaluation_mode,
     )
     hard_plan_by_box = {
         trip.plan.box_ids[0]: trip.plan
         for trip in boxwise.trips
-        if data.boxes[trip.plan.box_ids[0]].hard_deadline_s is not None
+        if (
+            evaluation_mode == URGENT_PRIORITY_MODE
+            or data.boxes[trip.plan.box_ids[0]].hard_deadline_s is not None
+        )
     }
     plans = list(hard_plan_by_box.values())
     service_ids = sorted({box.service_id for box in data.boxes.values()})
@@ -175,7 +187,9 @@ def build_grouped_initial_plans(
             (
                 box
                 for box in data.boxes.values()
-                if box.service_id == service_id and box.hard_deadline_s is None
+                if box.service_id == service_id
+                and evaluation_mode != URGENT_PRIORITY_MODE
+                and box.hard_deadline_s is None
             ),
             key=_box_order,
         )
@@ -311,7 +325,12 @@ def _grouped_quality(
     data: Q2Data,
     solution: Q2Solution,
     objective_order: str = "timeliness",
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> tuple[float, ...]:
+    if evaluation_mode == URGENT_PRIORITY_MODE:
+        return urgent_search_key(data, solution)
+    if evaluation_mode != PUBLISHED_MODE:
+        raise ValueError(f"unknown Q2 evaluation mode: {evaluation_mode}")
     hard_violations = sum(
         1
         for record in solution.deliveries
@@ -347,20 +366,30 @@ def _schedule_search_state(
     data: Q2Data,
     plans: Sequence[TripPlan],
     method: str,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     return schedule_trips_greedy(
         data,
         plans,
         method=method,
         enforce_hard_deadlines=False,
+        evaluation_mode=evaluation_mode,
     )
 
 
-def _tardy_box_ids(data: Q2Data, solution: Q2Solution) -> tuple[str, ...]:
+def _tardy_box_ids(
+    data: Q2Data,
+    solution: Q2Solution,
+    evaluation_mode: str = PUBLISHED_MODE,
+) -> tuple[str, ...]:
     tardy = []
     for record in solution.deliveries:
         box = data.boxes[record.box_id]
-        limit = box.hard_deadline_s
+        limit = (
+            required_deadline_s(box)
+            if evaluation_mode == URGENT_PRIORITY_MODE
+            else box.hard_deadline_s
+        )
         is_hard = limit is not None
         if limit is None:
             limit = box.expected_time_s
@@ -368,7 +397,9 @@ def _tardy_box_ids(data: Q2Data, solution: Q2Solution) -> tuple[str, ...]:
         if delay > 1e-7:
             tardy.append(
                 (
-                    0 if is_hard else 1,
+                    0
+                    if evaluation_mode == URGENT_PRIORITY_MODE and is_urgent_box(box)
+                    else 1 if evaluation_mode == URGENT_PRIORITY_MODE else 0 if is_hard else 1,
                     -box.priority_weight * delay,
                     record.box_id,
                 )
@@ -395,11 +426,14 @@ def _repair_tardy_boxes(
     reserve_ratio: float,
     range_energy_fraction: float,
     objective_order: str,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> tuple[list[TripPlan], Q2Solution, int]:
-    current_quality = _grouped_quality(data, current, objective_order)
+    current_quality = _grouped_quality(
+        data, current, objective_order, evaluation_mode
+    )
     accepted = 0
     for _ in range(max_steps):
-        tardy_ids = _tardy_box_ids(data, current)
+        tardy_ids = _tardy_box_ids(data, current, evaluation_mode)
         if not tardy_ids:
             break
         best = None
@@ -435,8 +469,12 @@ def _repair_tardy_boxes(
                     if source is not None:
                         trial_plans.append(source)
                     trial_plans.append(singleton)
-                    trial = _schedule_search_state(data, trial_plans, method)
-                    quality = _grouped_quality(data, trial, objective_order)
+                    trial = _schedule_search_state(
+                        data, trial_plans, method, evaluation_mode
+                    )
+                    quality = _grouped_quality(
+                        data, trial, objective_order, evaluation_mode
+                    )
                     if quality < current_quality and (best is None or quality < best[0]):
                         best = (quality, trial_plans, trial)
         if best is None:
@@ -457,8 +495,11 @@ def _merge_improving_plans(
     reserve_ratio: float,
     range_energy_fraction: float,
     objective_order: str,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> tuple[list[TripPlan], Q2Solution, int]:
-    current_quality = _grouped_quality(data, current, objective_order)
+    current_quality = _grouped_quality(
+        data, current, objective_order, evaluation_mode
+    )
     accepted = 0
     for _ in range(max_steps):
         candidates = []
@@ -505,8 +546,12 @@ def _merge_improving_plans(
                 if index not in (left_index, right_index)
             ]
             trial_plans.append(merged)
-            trial = _schedule_search_state(data, trial_plans, method)
-            quality = _grouped_quality(data, trial, objective_order)
+            trial = _schedule_search_state(
+                data, trial_plans, method, evaluation_mode
+            )
+            quality = _grouped_quality(
+                data, trial, objective_order, evaluation_mode
+            )
             if quality < current_quality:
                 plans = trial_plans
                 current = trial
@@ -528,10 +573,13 @@ def _polish_retypes(
     reserve_ratio: float,
     range_energy_fraction: float,
     objective_order: str,
+    evaluation_mode: str = PUBLISHED_MODE,
     max_passes: int = 4,
 ) -> tuple[list[TripPlan], Q2Solution, int]:
     """Change aircraft models when global resource timing improves."""
-    current_quality = _grouped_quality(data, current, objective_order)
+    current_quality = _grouped_quality(
+        data, current, objective_order, evaluation_mode
+    )
     accepted = 0
     for _ in range(max_passes):
         best = None
@@ -547,8 +595,12 @@ def _polish_retypes(
                     continue
                 trial_plans = list(plans)
                 trial_plans[index] = variant
-                trial = _schedule_search_state(data, trial_plans, method)
-                quality = _grouped_quality(data, trial, objective_order)
+                trial = _schedule_search_state(
+                    data, trial_plans, method, evaluation_mode
+                )
+                quality = _grouped_quality(
+                    data, trial, objective_order, evaluation_mode
+                )
                 if quality < current_quality and (best is None or quality < best[0]):
                     best = (quality, trial_plans, trial)
         if best is None:
@@ -570,10 +622,13 @@ def _local_search_moves(
     seed: int,
     iterations: int,
     objective_order: str,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> tuple[list[TripPlan], Q2Solution, int]:
     """Reference-style improving moves with full physics and resource decoding."""
     rng = random.Random(seed)
-    current_quality = _grouped_quality(data, current, objective_order)
+    current_quality = _grouped_quality(
+        data, current, objective_order, evaluation_mode
+    )
     accepted = 0
 
     def best_plan(stops: Sequence[TripStop], preferred: str | None = None) -> TripPlan | None:
@@ -591,8 +646,8 @@ def _local_search_moves(
 
     def try_accept(trial_plans: list[TripPlan]) -> bool:
         nonlocal plans, current, current_quality, accepted
-        trial = _schedule_search_state(data, trial_plans, method)
-        quality = _grouped_quality(data, trial, objective_order)
+        trial = _schedule_search_state(data, trial_plans, method, evaluation_mode)
+        quality = _grouped_quality(data, trial, objective_order, evaluation_mode)
         if quality < current_quality:
             plans = trial_plans
             current = trial
@@ -764,6 +819,7 @@ def solve_grouped_local_search(
     reserve_ratio: float = 0.20,
     range_energy_fraction: float = 1.0,
     objective_order: str = "timeliness",
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     """Repair and improve pure FFD trips with full resource simulation."""
     if iterations < 0:
@@ -784,7 +840,7 @@ def solve_grouped_local_search(
         )
     )
     initial_trip_count = len(plans)
-    current = _schedule_search_state(data, plans, method)
+    current = _schedule_search_state(data, plans, method, evaluation_mode)
     plans, current, accepted_repairs = _repair_tardy_boxes(
         data,
         arcs,
@@ -795,6 +851,7 @@ def solve_grouped_local_search(
         reserve_ratio=reserve_ratio,
         range_energy_fraction=range_energy_fraction,
         objective_order=objective_order,
+        evaluation_mode=evaluation_mode,
     )
     plans, current, accepted_merges = _merge_improving_plans(
         data,
@@ -807,11 +864,12 @@ def solve_grouped_local_search(
         reserve_ratio=reserve_ratio,
         range_energy_fraction=range_energy_fraction,
         objective_order=objective_order,
+        evaluation_mode=evaluation_mode,
     )
     base_plans = list(plans)
     base_solution = current
     best_branch = (
-        _grouped_quality(data, current, objective_order),
+        _grouped_quality(data, current, objective_order, evaluation_mode),
         plans,
         current,
         0,
@@ -834,6 +892,7 @@ def solve_grouped_local_search(
             branch_seed,
             iterations,
             objective_order,
+            evaluation_mode,
         )
         branch_plans, branch_solution, retypes_a = _polish_retypes(
             data,
@@ -844,6 +903,7 @@ def solve_grouped_local_search(
             reserve_ratio,
             range_energy_fraction,
             objective_order,
+            evaluation_mode,
         )
         branch_plans, branch_solution, moves_b = _local_search_moves(
             data,
@@ -857,6 +917,7 @@ def solve_grouped_local_search(
             branch_seed + 100,
             max(200, iterations // 2),
             objective_order,
+            evaluation_mode,
         )
         branch_plans, branch_solution, retypes_b = _polish_retypes(
             data,
@@ -867,6 +928,7 @@ def solve_grouped_local_search(
             reserve_ratio,
             range_energy_fraction,
             objective_order,
+            evaluation_mode,
         )
         branch_plans, branch_solution, branch_merges = _merge_improving_plans(
             data,
@@ -879,8 +941,11 @@ def solve_grouped_local_search(
             reserve_ratio=reserve_ratio,
             range_energy_fraction=range_energy_fraction,
             objective_order=objective_order,
+            evaluation_mode=evaluation_mode,
         )
-        branch_quality = _grouped_quality(data, branch_solution, objective_order)
+        branch_quality = _grouped_quality(
+            data, branch_solution, objective_order, evaluation_mode
+        )
         if branch_quality < best_branch[0]:
             best_branch = (
                 branch_quality,
@@ -909,9 +974,15 @@ def solve_grouped_local_search(
                 arcs,
                 reserve_ratio=reserve_ratio,
                 range_energy_fraction=range_energy_fraction,
+                evaluation_mode=evaluation_mode,
             )
         )
-        fallback = schedule_trips_greedy(data, fallback_plans, method=method)
+        fallback = schedule_trips_greedy(
+            data,
+            fallback_plans,
+            method=method,
+            evaluation_mode=evaluation_mode,
+        )
         fallback_plans, fallback, fallback_merges = _merge_improving_plans(
             data,
             arcs,
@@ -923,11 +994,17 @@ def solve_grouped_local_search(
             reserve_ratio=reserve_ratio,
             range_energy_fraction=range_energy_fraction,
             objective_order=objective_order,
+            evaluation_mode=evaluation_mode,
         )
-        if _grouped_quality(data, fallback, objective_order) < current_quality:
+        if (
+            _grouped_quality(data, fallback, objective_order, evaluation_mode)
+            < current_quality
+        ):
             plans = fallback_plans
             current = fallback
-            current_quality = _grouped_quality(data, current, objective_order)
+            current_quality = _grouped_quality(
+                data, current, objective_order, evaluation_mode
+            )
             accepted_merges = fallback_merges
             accepted_local_moves = 0
             accepted_retypes = 0
@@ -947,6 +1024,7 @@ def solve_grouped_local_search(
             "reserve_ratio": reserve_ratio,
             "range_energy_fraction": range_energy_fraction,
             "objective_order": objective_order,
+            "evaluation_mode": evaluation_mode,
         }
     )
     return replace(

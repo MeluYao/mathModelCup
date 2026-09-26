@@ -137,7 +137,7 @@ class Q2Solution:
     method: str
     trips: Tuple[TripExecution, ...]
     deliveries: Tuple[DeliveryRecord, ...]
-    objective: Tuple[float, float, float, int]
+    objective: Tuple[float, ...]
     runtime_s: float
     solver_status: str
     diagnostics: Mapping[str, object] = field(default_factory=dict)

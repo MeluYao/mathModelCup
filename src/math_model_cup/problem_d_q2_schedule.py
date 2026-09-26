@@ -19,23 +19,49 @@ from .problem_d_q2 import (
     TripPlan,
 )
 from .problem_d_q2_physics import charge_time_s, objective_vector
+from .problem_d_q2_urgent import (
+    PUBLISHED_MODE,
+    URGENT_PRIORITY_MODE,
+    is_urgent_box,
+    required_deadline_s,
+    urgent_objective_vector,
+)
 
 
-def _latest_start(data: Q2Data, plan: TripPlan) -> float:
+def _deadline(data: Q2Data, box_id: str, evaluation_mode: str) -> float | None:
+    box = data.boxes[box_id]
+    if evaluation_mode == URGENT_PRIORITY_MODE:
+        return required_deadline_s(box)
+    if evaluation_mode != PUBLISHED_MODE:
+        raise ValueError(f"unknown Q2 evaluation mode: {evaluation_mode}")
+    return box.hard_deadline_s
+
+
+def _latest_start(
+    data: Q2Data,
+    plan: TripPlan,
+    evaluation_mode: str = PUBLISHED_MODE,
+) -> float:
     limits = [
-        data.boxes[box_id].hard_deadline_s - plan.delivery_offsets_s[box_id]
+        deadline - plan.delivery_offsets_s[box_id]
         for box_id in plan.box_ids
-        if data.boxes[box_id].hard_deadline_s is not None
+        for deadline in (_deadline(data, box_id, evaluation_mode),)
+        if deadline is not None
     ]
     return min(limits) if limits else inf
 
 
-def _hard_deadlines_hold(data: Q2Data, plan: TripPlan, start_time_s: float) -> bool:
+def _hard_deadlines_hold(
+    data: Q2Data,
+    plan: TripPlan,
+    start_time_s: float,
+    evaluation_mode: str = PUBLISHED_MODE,
+) -> bool:
     return all(
-        box.hard_deadline_s is None
-        or start_time_s + plan.delivery_offsets_s[box_id] <= box.hard_deadline_s + 1e-9
+        deadline is None
+        or start_time_s + plan.delivery_offsets_s[box_id] <= deadline + 1e-9
         for box_id in plan.box_ids
-        for box in (data.boxes[box_id],)
+        for deadline in (_deadline(data, box_id, evaluation_mode),)
     )
 
 
@@ -46,6 +72,7 @@ def _make_solution(
     runtime_s: float,
     solver_status: str,
     diagnostics: Dict[str, object] | None = None,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     ordered = tuple(sorted(executions, key=lambda trip: (trip.start_time_s, trip.trip_id)))
     deliveries = tuple(
@@ -67,7 +94,12 @@ def _make_solution(
         solver_status=solver_status,
         diagnostics=diagnostics or {},
     )
-    return replace(provisional, objective=objective_vector(data, provisional))
+    objective = (
+        urgent_objective_vector(data, provisional)
+        if evaluation_mode == URGENT_PRIORITY_MODE
+        else objective_vector(data, provisional)
+    )
+    return replace(provisional, objective=objective)
 
 
 def schedule_trips_greedy(
@@ -76,6 +108,7 @@ def schedule_trips_greedy(
     method: str = "greedy_schedule",
     *,
     enforce_hard_deadlines: bool = True,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     """Schedule urgent trips first at the earliest compatible resource time."""
     started = perf_counter()
@@ -87,9 +120,9 @@ def schedule_trips_greedy(
         key=lambda index: (
             min(
                 (
-                    data.boxes[box_id].hard_deadline_s
+                    _deadline(data, box_id, evaluation_mode)
                     for box_id in plans[index].box_ids
-                    if data.boxes[box_id].hard_deadline_s is not None
+                    if _deadline(data, box_id, evaluation_mode) is not None
                 ),
                 default=inf,
             ),
@@ -117,7 +150,9 @@ def schedule_trips_greedy(
                     aircraft_available[unit.aircraft_id],
                     battery_available[battery.battery_id],
                 )
-                if not enforce_hard_deadlines or _hard_deadlines_hold(data, plan, start):
+                if not enforce_hard_deadlines or _hard_deadlines_hold(
+                    data, plan, start, evaluation_mode
+                ):
                     choices.append((start, unit.aircraft_id, battery.battery_id))
         if not choices:
             raise InfeasibleQ2Error(
@@ -150,6 +185,7 @@ def schedule_trips_greedy(
         executions,
         perf_counter() - started,
         "FEASIBLE",
+        evaluation_mode=evaluation_mode,
     )
 
 
@@ -157,6 +193,8 @@ def construct_resource_aware_boxwise_solution(
     data: Q2Data,
     candidates: Sequence[TripPlan],
     method: str,
+    *,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     """Build an independent feasible incumbent from single-box alternatives."""
     started = perf_counter()
@@ -175,8 +213,8 @@ def construct_resource_aware_boxwise_solution(
     ordered_box_ids = sorted(
         data.boxes,
         key=lambda box_id: (
-            data.boxes[box_id].hard_deadline_s
-            if data.boxes[box_id].hard_deadline_s is not None
+            _deadline(data, box_id, evaluation_mode)
+            if _deadline(data, box_id, evaluation_mode) is not None
             else inf,
             data.boxes[box_id].expected_time_s,
             -data.boxes[box_id].priority_weight,
@@ -199,10 +237,8 @@ def construct_resource_aware_boxwise_solution(
                         battery_available[battery.battery_id],
                     )
                     delivery_time = start_time + plan.delivery_offsets_s[box_id]
-                    if (
-                        box.hard_deadline_s is not None
-                        and delivery_time > box.hard_deadline_s + 1e-9
-                    ):
+                    deadline = _deadline(data, box_id, evaluation_mode)
+                    if deadline is not None and delivery_time > deadline + 1e-9:
                         continue
                     choices.append(
                         (
@@ -244,6 +280,7 @@ def construct_resource_aware_boxwise_solution(
         perf_counter() - started,
         "FEASIBLE",
         diagnostics={"initialization": "independent_resource_aware"},
+        evaluation_mode=evaluation_mode,
     )
 
 
@@ -252,11 +289,15 @@ def schedule_trips_cp_sat(
     plans: Sequence[TripPlan],
     method: str = "cp_sat_schedule",
     time_limit_s: float = 60.0,
+    *,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     """Assign fixed trip plans to aircraft and batteries with exact no-overlap."""
     started = perf_counter()
     if not plans:
-        return _make_solution(data, method, (), 0.0, "OPTIMAL")
+        return _make_solution(
+            data, method, (), 0.0, "OPTIMAL", evaluation_mode=evaluation_mode
+        )
 
     battery_by_id = {battery.battery_id: battery for battery in data.batteries}
     max_full_charge = max(battery.full_charge_time_s for battery in data.batteries)
@@ -264,7 +305,10 @@ def schedule_trips_cp_sat(
         ceil(
             sum(plan.duration_s + max_full_charge for plan in plans)
             + max(
-                (box.hard_deadline_s or 0.0 for box in data.boxes.values()),
+                (
+                    _deadline(data, box_id, evaluation_mode) or 0.0
+                    for box_id in data.boxes
+                ),
                 default=0.0,
             )
             + 1.0
@@ -338,7 +382,7 @@ def schedule_trips_cp_sat(
         battery_assignments.append(battery_bools)
 
         for box_id in plan.box_ids:
-            deadline = data.boxes[box_id].hard_deadline_s
+            deadline = _deadline(data, box_id, evaluation_mode)
             if deadline is not None:
                 latest = floor(deadline - plan.delivery_offsets_s[box_id] + 1e-9)
                 if latest < 0:
@@ -355,11 +399,27 @@ def schedule_trips_cp_sat(
     makespan = model.new_int_var(0, horizon, "makespan")
     model.add_max_equality(makespan, ends)
     priority_start = sum(
-        int(sum(data.boxes[box_id].priority_weight for box_id in plan.box_ids))
+        int(
+            sum(
+                data.boxes[box_id].priority_weight
+                * (
+                    1_000_000.0 / data.boxes[box_id].expected_time_s
+                    if evaluation_mode == URGENT_PRIORITY_MODE
+                    and is_urgent_box(data.boxes[box_id])
+                    else 1.0
+                )
+                for box_id in plan.box_ids
+                if evaluation_mode != URGENT_PRIORITY_MODE
+                or is_urgent_box(data.boxes[box_id])
+            )
+        )
         * starts[index]
         for index, plan in enumerate(plans)
     )
-    model.minimize(makespan * 100_000 + priority_start)
+    if evaluation_mode == URGENT_PRIORITY_MODE:
+        model.minimize(priority_start * (horizon + 1) + makespan)
+    else:
+        model.minimize(makespan * 100_000 + priority_start)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_s)
@@ -410,4 +470,5 @@ def schedule_trips_cp_sat(
             "cp_sat_objective": solver.objective_value,
             "cp_sat_best_bound": solver.best_objective_bound,
         },
+        evaluation_mode=evaluation_mode,
     )
