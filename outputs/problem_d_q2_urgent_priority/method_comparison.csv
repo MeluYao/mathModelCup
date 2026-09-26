@@ -1,0 +1,3 @@
+﻿method,validation,solver_status,urgent_weighted_delivery,energy_kwh,trip_count,makespan_s,runtime_s,late_box_count,total_lateness_s,urgent_late_count,normal_late_count,minimum_return_soc_percent,incumbent_source,seed_retained
+integrated_milp,PASS,FEASIBLE,0.588323023682389,66.33124506387801,21,9853.275573015177,3.9442713000000005,0,0.0,0,0,20.949278300924455,provided_seed,True
+hybrid,PASS,FEASIBLE,0.5823619191201365,74.29720310449979,25,11483.341038145612,7.011255400000003,0,0.0,0,0,20.949278300924455,hybrid_search,False

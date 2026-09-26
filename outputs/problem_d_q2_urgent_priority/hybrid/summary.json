@@ -1,0 +1,100 @@
+{
+  "method": "hybrid",
+  "validation": "PASS",
+  "solver_status": "FEASIBLE",
+  "urgent_weighted_delivery": 0.5823619191201365,
+  "energy_kwh": 74.29720310449979,
+  "trip_count": 25,
+  "makespan_s": 11483.341038145612,
+  "runtime_s": 7.011255400000003,
+  "late_box_count": 0,
+  "total_lateness_s": 0.0,
+  "urgent_late_count": 0,
+  "normal_late_count": 0,
+  "minimum_return_soc_percent": 20.949278300924455,
+  "incumbent_source": "hybrid_search",
+  "seed_retained": false,
+  "objective_order": [
+    "urgent_weighted_delivery",
+    "energy_kwh",
+    "trip_count",
+    "makespan_s"
+  ],
+  "diagnostics": {
+    "seed": 20260928,
+    "iterations_requested": 20,
+    "feasible_moves": 3,
+    "repair_feasibility_fallbacks": 17,
+    "rejected_infeasible_moves": 17,
+    "accepted_moves": 3,
+    "improving_moves": 3,
+    "restarts": 0,
+    "destroy_weights": {
+      "random_box": 1.0,
+      "worst_timeliness": 1.0,
+      "high_energy": 1.0,
+      "same_service": 1.0,
+      "whole_trip": 1.0
+    },
+    "repair_weights": {
+      "minimum_increment": 1.0,
+      "regret_2": 1.0
+    },
+    "convergence_history": [
+      [
+        0,
+        [
+          0.588323023682389,
+          66.33124506387801,
+          21.0,
+          9853.275573015177
+        ]
+      ],
+      [
+        20,
+        [
+          0.5823619191201365,
+          74.29720310449979,
+          25.0,
+          11483.341038145612
+        ]
+      ]
+    ],
+    "initialization": "provided_solution",
+    "evaluation_mode": "urgent_priority",
+    "incumbent_source": "hybrid_search",
+    "seed_objective": [
+      0.588323023682389,
+      66.33124506387801,
+      21.0,
+      9853.275573015177
+    ],
+    "seed_retained": false,
+    "native_improved_seed": true,
+    "native_candidate_objective": [
+      0.5823619191201365,
+      74.29720310449979,
+      25.0,
+      11483.341038145612
+    ],
+    "has_feasible_incumbent": true,
+    "rounds_completed": 1,
+    "iterations_per_round": 20,
+    "candidate_time_limit_s": 5.0,
+    "final_candidate_count": 5255,
+    "objective_history": [
+      [
+        0.588323023682389,
+        66.33124506387801,
+        21.0,
+        9853.275573015177
+      ],
+      [
+        0.5823619191201365,
+        74.29720310449979,
+        25.0,
+        11483.341038145612
+      ]
+    ]
+  }
+}
