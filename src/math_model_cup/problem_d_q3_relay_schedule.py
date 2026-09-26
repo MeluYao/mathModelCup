@@ -172,35 +172,21 @@ def build_relay_windows(
             flush()
 
         # Sliding alternatives remove the arbitrary dependence on the first
-        # segment of a partition.  Keep one maximal feasible window per start
-        # plus singleton windows for precise resource-conflict repair.
+        # segment of a partition.  Keep every feasible consecutive prefix:
+        # intermediate windows are necessary when a maximal window overlaps
+        # another relay task but a shorter prefix does not.
         for start_index, first in enumerate(covered):
-            for candidate_group in ([first],):
-                signature = (
-                    state.state_id,
-                    tuple(item.segment_id for item in candidate_group),
-                )
-                if signature not in signatures:
-                    window = _window_for_segments(
-                        data,
-                        state,
-                        candidate_group,
-                        window_id=f"W{len(windows) + 1:06d}",
-                    )
-                    if window is not None:
-                        signatures.add(signature)
-                        windows.append(window)
             group = []
             previous_end = first.start_time_s
             for segment in covered[start_index : start_index + maximum_group_size]:
                 if group and segment.start_time_s - previous_end > maximum_gap_s:
                     break
                 trial = group + [segment]
-                if _window_for_segments(data, state, trial, "trial") is None:
+                trial_window = _window_for_segments(data, state, trial, "trial")
+                if trial_window is None:
                     break
                 group = trial
                 previous_end = max(previous_end, segment.end_time_s)
-            if group:
                 signature = (state.state_id, tuple(item.segment_id for item in group))
                 if signature not in signatures:
                     window = _window_for_segments(

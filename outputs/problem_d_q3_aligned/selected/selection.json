@@ -1,0 +1,5 @@
+{
+  "selected_scenario_id": "hybrid",
+  "selected_result_directory": "../hybrid",
+  "selection_rule": "lexicographic_q3_objective_among_independently_validated_results"
+}

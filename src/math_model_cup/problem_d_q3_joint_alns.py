@@ -387,12 +387,15 @@ def reschedule_transport_with_state_grid(
     occupancy_slot_s: float = 30.0,
     transition_buffer_s: float = 0.0,
     soft_horizon_s: float = 30_000.0,
+    count_distinct_states: bool = True,
     time_limit_s: float = 60.0,
     stop_after_first_solution: bool = True,
 ) -> Q2Solution:
     """Choose transport starts and whole-trip relay states on a time grid.
 
-    The model limits the number of simultaneously occupied relay states.  A
+    The model limits either distinct occupied relay states or active dark-trip
+    campaigns.  Trip counting is conservative but guarantees that two trips
+    using the same state do not silently share one physical relay.  A
     configurable buffer approximates travel and turnaround; the exact relay
     scheduler remains the final feasibility oracle.
     """
@@ -479,6 +482,7 @@ def reschedule_transport_with_state_grid(
         model.add_no_overlap(intervals)
 
     occupancy_choices: dict[tuple[str, int], list[cp_model.IntVar]] = {}
+    relay_choices_by_slot: dict[int, list[cp_model.IntVar]] = {}
     trip_choices: dict[str, list[tuple[cp_model.IntVar, int, str]]] = {}
     for trip in transport.trips:
         members = dark_by_trip.get(trip.trip_id, [])
@@ -532,17 +536,44 @@ def reschedule_transport_with_state_grid(
         choices = []
         for candidate_start in sorted(candidate_starts):
             for state_id in valid_states:
+                state = state_by_id[state_id]
                 variable = model.new_bool_var(
                     f"grid_choice_{trip.trip_id}_{candidate_start}_{state_id}"
                 )
                 choices.append((variable, candidate_start, state_id))
-                left = candidate_start + first_offset - buffer
-                right = candidate_start + last_offset + buffer
+                if count_distinct_states:
+                    lead = buffer
+                    tail = buffer
+                else:
+                    lead = int(
+                        ceil(
+                            (
+                                data.relay_model.preparation_time_s
+                                + data.relay_model.link_setup_time_s
+                                + state.round_trip_time_s / 2.0
+                                + transition_buffer_s
+                            )
+                            * scale
+                        )
+                    )
+                    tail = int(
+                        ceil(
+                            (
+                                data.relay_model.turnaround_time_s
+                                + state.round_trip_time_s / 2.0
+                                + transition_buffer_s
+                            )
+                            * scale
+                        )
+                    )
+                left = candidate_start + first_offset - lead
+                right = candidate_start + last_offset + tail
                 for slot in range(
                     floor(left / occupancy_slot),
                     ceil(right / occupancy_slot),
                 ):
                     occupancy_choices.setdefault((state_id, slot), []).append(variable)
+                    relay_choices_by_slot.setdefault(slot, []).append(variable)
         model.add_exactly_one(variable for variable, _, _ in choices)
         model.add(
             starts[trip.trip_id]
@@ -550,15 +581,19 @@ def reschedule_transport_with_state_grid(
         )
         trip_choices[trip.trip_id] = choices
 
-    occupied_state_by_slot: dict[int, list[cp_model.IntVar]] = {}
-    for (state_id, slot), choices in occupancy_choices.items():
-        occupied = model.new_bool_var(f"occupied_{state_id}_{slot}")
-        for choice in choices:
-            model.add(occupied >= choice)
-        model.add(occupied <= sum(choices))
-        occupied_state_by_slot.setdefault(slot, []).append(occupied)
-    for occupied_states in occupied_state_by_slot.values():
-        model.add(sum(occupied_states) <= len(data.relay_units))
+    if count_distinct_states:
+        occupied_state_by_slot: dict[int, list[cp_model.IntVar]] = {}
+        for (state_id, slot), choices in occupancy_choices.items():
+            occupied = model.new_bool_var(f"occupied_{state_id}_{slot}")
+            for choice in choices:
+                model.add(occupied >= choice)
+            model.add(occupied <= sum(choices))
+            occupied_state_by_slot.setdefault(slot, []).append(occupied)
+        for occupied_states in occupied_state_by_slot.values():
+            model.add(sum(occupied_states) <= len(data.relay_units))
+    else:
+        for choices in relay_choices_by_slot.values():
+            model.add(sum(choices) <= len(data.relay_units))
 
     makespan = model.new_int_var(0, horizon, "grid_makespan")
     model.add_max_equality(makespan, tuple(ends.values()))
@@ -629,6 +664,9 @@ def reschedule_transport_with_state_grid(
             "grid_step_s": grid_step_s,
             "occupancy_slot_s": occupancy_slot_s,
             "transition_buffer_s": transition_buffer_s,
+            "relay_occupancy_mode": (
+                "state" if count_distinct_states else "trip"
+            ),
             "selected_relay_states": selected_states,
         },
     )
@@ -645,9 +683,14 @@ def reschedule_transport_with_segment_state_grid(
     soft_grid_step_s: float = 300.0,
     occupancy_slot_s: float = 30.0,
     soft_horizon_s: float = 30_000.0,
+    count_distinct_trip_states: bool = False,
     time_limit_s: float = 180.0,
 ) -> Q2Solution:
-    """Choose transport starts and one covering relay state per dark segment."""
+    """Choose transport starts and one covering relay state per dark segment.
+
+    When ``count_distinct_trip_states`` is true, simultaneous uses of the same
+    state by different transport trips consume separate physical relays.
+    """
     if min(hard_grid_step_s, soft_grid_step_s, occupancy_slot_s) <= 0.0:
         raise ValueError("time-grid steps must be positive")
     started = perf_counter()
@@ -757,7 +800,7 @@ def reschedule_transport_with_segment_state_grid(
     for intervals in battery_intervals.values():
         model.add_no_overlap(intervals)
 
-    occupancy: dict[tuple[str, int], list[cp_model.IntVar]] = {}
+    occupancy: dict[tuple[str, str, int], list[cp_model.IntVar]] = {}
     segment_choices: dict[
         str, list[tuple[int, str, cp_model.IntVar]]
     ] = {}
@@ -807,13 +850,18 @@ def reschedule_transport_with_segment_state_grid(
                     model.add(assigned == 0)
                     continue
                 for slot in range(floor(left / occupancy_slot), ceil(right / occupancy_slot)):
-                    occupancy.setdefault((state_id, slot), []).append(assigned)
+                    owner = (
+                        segment.transport_trip_id
+                        if count_distinct_trip_states
+                        else "shared"
+                    )
+                    occupancy.setdefault((owner, state_id, slot), []).append(assigned)
             model.add(sum(alternatives) == start_selected)
         segment_choices[segment.segment_id] = assignments
 
     occupied_by_slot: dict[int, list[cp_model.IntVar]] = {}
-    for (state_id, slot), alternatives in occupancy.items():
-        occupied = model.new_bool_var(f"occupied_{state_id}_{slot}")
+    for (owner, state_id, slot), alternatives in occupancy.items():
+        occupied = model.new_bool_var(f"occupied_{owner}_{state_id}_{slot}")
         for variable in alternatives:
             model.add(occupied >= variable)
         model.add(occupied <= sum(alternatives))
@@ -890,6 +938,9 @@ def reschedule_transport_with_segment_state_grid(
             "hard_grid_step_s": hard_grid_step_s,
             "soft_grid_step_s": soft_grid_step_s,
             "occupancy_slot_s": occupancy_slot_s,
+            "relay_occupancy_mode": (
+                "trip_state" if count_distinct_trip_states else "state"
+            ),
             "selected_relay_states_by_segment": selected_states,
             "segment_state_assignment_count": sum(
                 len(choices) for choices in segment_choices.values()

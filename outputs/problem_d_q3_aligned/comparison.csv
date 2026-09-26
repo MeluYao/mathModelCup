@@ -1,0 +1,2 @@
+﻿scenario_id,q2_method,q2_weighted_delivery_time,q2_makespan_s,q2_energy_kwh,q2_trip_count,status,is_valid,q3_weighted_delivery_time,q3_joint_makespan_s,q3_total_energy_kwh,q3_transport_trip_count,q3_relay_trip_count,communication_segment_count,direct_segment_count,relay_segment_count,maximum_relay_concurrency,maximum_energy_unit_concurrency,runtime_s,reason
+hybrid,hybrid,0.5158908995531455,9534.345058907296,69.52235221186811,24,FEASIBLE,True,0.5658038173227689,11227.13823639674,74.59828358288918,24,6,204,120,84,2,3,148.27427219999998,

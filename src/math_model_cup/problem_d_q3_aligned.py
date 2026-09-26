@@ -10,7 +10,11 @@ from .problem_d_q2 import InfeasibleQ2Error, Q2Solution
 from .problem_d_q2_geometry import ArcGeometry
 from .problem_d_q3 import CommunicationSegment, Q3Data, Q3Solution, RelayState
 from .problem_d_q3_communication import CommunicationEngine
-from .problem_d_q3_joint_alns import reschedule_transport_with_segment_state_grid
+from .problem_d_q3_joint_alns import (
+    relay_batches_from_solution,
+    reschedule_transport_with_relay_batches,
+    reschedule_transport_with_segment_state_grid,
+)
 from .problem_d_q3_relay_candidates import (
     CoverageAtlas,
     build_coverage_atlas,
@@ -105,6 +109,64 @@ def prepare_communication_model(
     )
 
 
+def solve_relay_with_resource_repair(
+    data: Q3Data,
+    arcs: Mapping[tuple[str, str], ArcGeometry],
+    transport: Q2Solution,
+    prepared: PreparedCommunicationModel,
+    *,
+    joint_time_limit_s: float,
+    relay_time_limit_s: float,
+) -> tuple[Q3Solution, Q2Solution, PreparedCommunicationModel]:
+    """Solve exact relay resources, repairing transport timing when necessary."""
+    common = {
+        "time_limit_s": relay_time_limit_s,
+        "max_sorties": 300,
+        "stop_after_first_solution": True,
+    }
+    try:
+        solution = solve_relay_subproblem(
+            data,
+            transport,
+            prepared.communication_segments,
+            prepared.relay_states,
+            prepared.atlas,
+            enforce_resource_no_overlap=True,
+            **common,
+        )
+        return solution, transport, prepared
+    except RelaySchedulingError:
+        relaxed = solve_relay_subproblem(
+            data,
+            transport,
+            prepared.communication_segments,
+            prepared.relay_states,
+            prepared.atlas,
+            enforce_resource_no_overlap=False,
+            **common,
+        )
+        batches = relay_batches_from_solution(relaxed)
+        repaired_transport = reschedule_transport_with_relay_batches(
+            data,
+            transport,
+            prepared.communication_segments,
+            prepared.relay_states,
+            batches,
+            time_limit_s=joint_time_limit_s,
+        )
+        repaired_model = prepare_communication_model(data, arcs, repaired_transport)
+        solution = solve_relay_subproblem(
+            data,
+            repaired_transport,
+            repaired_model.communication_segments,
+            repaired_model.relay_states,
+            repaired_model.atlas,
+            enforce_resource_no_overlap=True,
+            **common,
+        )
+        return solution, repaired_transport, repaired_model
+
+
 def solve_aligned_scenario(
     data: Q3Data,
     arcs: Mapping[tuple[str, str], ArcGeometry],
@@ -127,15 +189,13 @@ def solve_aligned_scenario(
             time_limit_s=joint_time_limit_s,
         )
         shifted_model = prepare_communication_model(data, arcs, shifted)
-        solution = solve_relay_subproblem(
+        solution, shifted, shifted_model = solve_relay_with_resource_repair(
             data,
+            arcs,
             shifted,
-            shifted_model.communication_segments,
-            shifted_model.relay_states,
-            shifted_model.atlas,
-            time_limit_s=relay_time_limit_s,
-            max_sorties=300,
-            stop_after_first_solution=True,
+            shifted_model,
+            joint_time_limit_s=joint_time_limit_s,
+            relay_time_limit_s=relay_time_limit_s,
         )
         diagnostics = dict(solution.diagnostics)
         diagnostics.update(

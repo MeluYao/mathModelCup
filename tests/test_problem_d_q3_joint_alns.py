@@ -212,3 +212,122 @@ def test_segment_state_grid_allows_different_states_within_one_trip(
         "D1": "RS1",
         "D2": "RS2",
     }
+
+
+def test_state_grid_can_count_relay_occupancy_by_trip(schedule_case) -> None:
+    transport_data, arcs, plans = schedule_case
+    transport = schedule_trips_greedy(transport_data, plans, method="synthetic")
+    trips = transport.trips[:2]
+    center = transport_data.nodes["O01"]
+    position = Position3D(
+        center.longitude, center.latitude, center.elevation_m + 100.0
+    )
+    segments = tuple(
+        CommunicationSegment(
+            f"D{index}", trip.trip_id, "cruise",
+            trip.start_time_s + 100.0, trip.start_time_s + 120.0,
+            position, position, False, -1.0,
+        )
+        for index, trip in enumerate(trips, start=1)
+    )
+    relay_model = RelayModel(
+        "R", 20.0, 10.0, 1.0, 10.0, 0.2, 0.0, 0.0, 0.0,
+        2.0, 2.0, 0.8, 0.5, 0.1, 300.0, 300.0,
+    )
+    data = Q3Data(
+        transport=transport_data,
+        relay_model=relay_model,
+        relay_units=(RelayUnit("R1", "R", "O01"),),
+        energy_units=(RelayEnergyUnit("E1", "R", 300.0),),
+        link_budget=None,
+    )
+    state = RelayState(
+        "RS1", center.longitude, center.latitude, center.elevation_m,
+        100.0, center.elevation_m + 100.0, True, 0.0, 0.1, 20.0,
+    )
+    atlas = CoverageAtlas(
+        state_ids=("RS1",),
+        segment_ids=tuple(segment.segment_id for segment in segments),
+        state_masks={"RS1": (1 << len(segments)) - 1},
+        segment_to_states={segment.segment_id: ("RS1",) for segment in segments},
+    )
+
+    shifted = reschedule_transport_with_state_grid(
+        data,
+        transport,
+        segments,
+        (state,),
+        atlas,
+        grid_step_s=10.0,
+        soft_grid_step_s=10.0,
+        occupancy_slot_s=5.0,
+        transition_buffer_s=30.0,
+        soft_horizon_s=1000.0,
+        count_distinct_states=False,
+        time_limit_s=5.0,
+    )
+
+    starts = {trip.trip_id: trip.start_time_s for trip in shifted.trips}
+    first, second = (starts[trip.trip_id] for trip in trips)
+    assert abs(first - second) >= 80.0
+    assert shifted.diagnostics["relay_occupancy_mode"] == "trip"
+
+
+def test_segment_grid_counts_same_state_separately_across_trips(
+    schedule_case,
+) -> None:
+    transport_data, arcs, plans = schedule_case
+    transport = schedule_trips_greedy(transport_data, plans, method="synthetic")
+    trips = transport.trips[:2]
+    center = transport_data.nodes["O01"]
+    position = Position3D(
+        center.longitude, center.latitude, center.elevation_m + 100.0
+    )
+    segments = tuple(
+        CommunicationSegment(
+            f"D{index}", trip.trip_id, "cruise",
+            trip.start_time_s + 100.0, trip.start_time_s + 120.0,
+            position, position, False, -1.0,
+        )
+        for index, trip in enumerate(trips, start=1)
+    )
+    relay_model = RelayModel(
+        "R", 20.0, 10.0, 1.0, 10.0, 0.2, 0.0, 0.0, 0.0,
+        2.0, 2.0, 0.8, 0.5, 0.1, 300.0, 300.0,
+    )
+    data = Q3Data(
+        transport=transport_data,
+        relay_model=relay_model,
+        relay_units=(RelayUnit("R1", "R", "O01"),),
+        energy_units=(RelayEnergyUnit("E1", "R", 300.0),),
+        link_budget=None,
+    )
+    state = RelayState(
+        "RS1", center.longitude, center.latitude, center.elevation_m,
+        100.0, center.elevation_m + 100.0, True, 20.0, 0.1, 20.0,
+    )
+    atlas = CoverageAtlas(
+        state_ids=("RS1",),
+        segment_ids=tuple(segment.segment_id for segment in segments),
+        state_masks={"RS1": (1 << len(segments)) - 1},
+        segment_to_states={segment.segment_id: ("RS1",) for segment in segments},
+    )
+
+    shifted = reschedule_transport_with_segment_state_grid(
+        data,
+        transport,
+        segments,
+        (state,),
+        atlas,
+        hard_grid_step_s=10.0,
+        soft_grid_step_s=10.0,
+        occupancy_slot_s=5.0,
+        soft_horizon_s=1000.0,
+        count_distinct_trip_states=True,
+        time_limit_s=5.0,
+    )
+
+    starts = {trip.trip_id: trip.start_time_s for trip in shifted.trips}
+    first, second = (starts[trip.trip_id] for trip in trips)
+    assert abs(first - second) >= 40.0
+    assert shifted.diagnostics["relay_occupancy_mode"] == "trip_state"

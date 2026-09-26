@@ -7,8 +7,10 @@ from math_model_cup.problem_d_q3 import Q3Objective
 from math_model_cup.problem_d_q3_aligned import (
     AlignedScenarioResult,
     prepare_communication_model,
+    solve_relay_with_resource_repair,
     select_best_valid_result,
 )
+from math_model_cup.problem_d_q3_relay_schedule import RelaySchedulingError
 from math_model_cup.problem_d_q3_transport_adapter import load_transport_scenario
 
 
@@ -68,3 +70,72 @@ def test_prepare_communication_models_are_scenario_specific(q3_data, q3_arcs) ->
     assert {segment.transport_trip_id for segment in right.communication_segments} == {
         trip.trip_id for trip in alns.solution.trips
     }
+
+
+def test_relay_resource_repair_uses_relaxed_batches_then_exact_resources(
+    monkeypatch,
+) -> None:
+    import math_model_cup.problem_d_q3_aligned as aligned
+
+    data = object()
+    arcs = object()
+    initial_transport = object()
+    repaired_transport = object()
+    initial_model = SimpleNamespace(
+        communication_segments=("initial-segments",),
+        relay_states=("initial-states",),
+        atlas="initial-atlas",
+    )
+    repaired_model = SimpleNamespace(
+        communication_segments=("repaired-segments",),
+        relay_states=("repaired-states",),
+        atlas="repaired-atlas",
+    )
+    relaxed_solution = SimpleNamespace(relay_sorties=("sortie",))
+    exact_solution = SimpleNamespace(solver_status="FEASIBLE")
+    calls = []
+
+    def fake_solve(_data, transport, segments, states, atlas, **kwargs):
+        calls.append((transport, kwargs["enforce_resource_no_overlap"]))
+        if transport is initial_transport and kwargs["enforce_resource_no_overlap"]:
+            raise RelaySchedulingError("relay resource conflict")
+        if not kwargs["enforce_resource_no_overlap"]:
+            return relaxed_solution
+        return exact_solution
+
+    monkeypatch.setattr(aligned, "solve_relay_subproblem", fake_solve)
+    monkeypatch.setattr(
+        aligned,
+        "relay_batches_from_solution",
+        lambda solution: ("batch",) if solution is relaxed_solution else (),
+    )
+    monkeypatch.setattr(
+        aligned,
+        "reschedule_transport_with_relay_batches",
+        lambda *args, **kwargs: repaired_transport,
+    )
+    monkeypatch.setattr(
+        aligned,
+        "prepare_communication_model",
+        lambda _data, _arcs, transport: (
+            repaired_model if transport is repaired_transport else initial_model
+        ),
+    )
+
+    solution, transport, prepared = solve_relay_with_resource_repair(
+        data,
+        arcs,
+        initial_transport,
+        initial_model,
+        joint_time_limit_s=10.0,
+        relay_time_limit_s=20.0,
+    )
+
+    assert solution is exact_solution
+    assert transport is repaired_transport
+    assert prepared is repaired_model
+    assert calls == [
+        (initial_transport, True),
+        (initial_transport, False),
+        (repaired_transport, True),
+    ]

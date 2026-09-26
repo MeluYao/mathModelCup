@@ -1,0 +1,46 @@
+{
+  "scenario_id": "hybrid",
+  "q2_method": "hybrid",
+  "q2_objective": [
+    0.5158908995531455,
+    9534.345058907296,
+    69.52235221186811,
+    24
+  ],
+  "q2_provenance": {
+    "incumbent_source": "hybrid_search",
+    "native_improved_seed": true,
+    "seed_retained": false,
+    "summary_sha256": "51de180097a09e47b4ce6659978294f349d863e528a08bc21f3f37abd2f12c96",
+    "trips_sha256": "197db99f64e46c1229c4138a487b69b96a85b84de0acf3f9ecf3d03c7df30f5d",
+    "deliveries_sha256": "ab388ad61f424c28a63a817d4e9e79034c621c046b36ea1d7a5d7e63f0e6d915"
+  },
+  "method": "fixed_transport_cp_sat_relay",
+  "solver_status": "FEASIBLE",
+  "is_valid": true,
+  "validation_issues": [],
+  "reason": "",
+  "runtime_s": 148.27427219999998,
+  "objective": [
+    0.5658038173227689,
+    11227.13823639674,
+    74.59828358288918,
+    24,
+    6
+  ],
+  "transport_objective": [
+    0.5658038173227689,
+    11133.984088655123,
+    69.52235221186812,
+    24
+  ],
+  "transport_trip_count": 24,
+  "relay_trip_count": 6,
+  "communication_segment_count": 204,
+  "direct_segment_count": 120,
+  "relay_segment_count": 84,
+  "dark_segment_count": 84,
+  "relay_state_count": 10,
+  "maximum_relay_concurrency": 2,
+  "maximum_energy_unit_concurrency": 3
+}
