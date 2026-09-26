@@ -18,14 +18,26 @@ from .problem_d_q2_schedule import (
     _make_solution,
     construct_resource_aware_boxwise_solution,
 )
+from .problem_d_q2_urgent import (
+    PUBLISHED_MODE,
+    URGENT_PRIORITY_MODE,
+    is_urgent_box,
+    required_deadline_s,
+)
 
 
-def _integrated_candidate_key(data: Q2Data, candidate) -> tuple:
+def _integrated_candidate_key(
+    data: Q2Data,
+    candidate,
+    evaluation_mode: str = PUBLISHED_MODE,
+) -> tuple:
     timing = sum(
         data.boxes[box_id].priority_weight
         * candidate.delivery_offsets_s[box_id]
         / data.boxes[box_id].expected_time_s
         for box_id in candidate.box_ids
+        if evaluation_mode != URGENT_PRIORITY_MODE
+        or is_urgent_box(data.boxes[box_id])
     )
     return timing, candidate.duration_s, candidate.energy_kwh, candidate.signature
 
@@ -38,10 +50,13 @@ def solve_integrated_milp(
     max_candidates: int = 1_200,
     *,
     initial_solution: Q2Solution | None = None,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     """Jointly select candidate routes and schedule both reusable resources."""
     started = perf_counter()
-    ensure_valid_initial_solution(data, arcs, initial_solution)
+    ensure_valid_initial_solution(
+        data, arcs, initial_solution, evaluation_mode=evaluation_mode
+    )
     generated_candidates = generate_initial_candidates(data, arcs, max_stops=max_stops)
     seed_executions = {
         trip.plan.signature: trip for trip in (initial_solution.trips if initial_solution else ())
@@ -61,14 +76,26 @@ def solve_integrated_milp(
         for candidate in all_candidates.values()
         if len(candidate.box_ids) != 1 and candidate.signature not in seed_signatures
     ]
-    optional.sort(key=lambda candidate: _integrated_candidate_key(data, candidate))
+    optional.sort(
+        key=lambda candidate: _integrated_candidate_key(
+            data, candidate, evaluation_mode
+        )
+    )
     protected = mandatory + seed_optional
     candidates = tuple(
         protected + optional[: max(0, max_candidates - len(protected))]
     )
-    bootstrap = construct_resource_aware_boxwise_solution(
-        data, candidates, "integrated_milp"
-    )
+    try:
+        bootstrap = construct_resource_aware_boxwise_solution(
+            data,
+            candidates,
+            "integrated_milp",
+            evaluation_mode=evaluation_mode,
+        )
+    except InfeasibleQ2Error:
+        if initial_solution is None:
+            raise
+        bootstrap = replace(initial_solution, method="integrated_milp")
     model = cp_model.CpModel()
     horizon = int(
         ceil(
@@ -152,7 +179,11 @@ def solve_integrated_milp(
         battery_assignments.append(battery_bools)
 
         for box_id in candidate.box_ids:
-            deadline = data.boxes[box_id].hard_deadline_s
+            deadline = (
+                required_deadline_s(data.boxes[box_id])
+                if evaluation_mode == URGENT_PRIORITY_MODE
+                else data.boxes[box_id].hard_deadline_s
+            )
             if deadline is not None:
                 latest = floor(deadline - candidate.delivery_offsets_s[box_id] + 1e-9)
                 if latest < 0:
@@ -199,6 +230,8 @@ def solve_integrated_milp(
                     data.boxes[box_id].priority_weight
                     / data.boxes[box_id].expected_time_s
                     for box_id in candidate.box_ids
+                    if evaluation_mode != URGENT_PRIORITY_MODE
+                    or is_urgent_box(data.boxes[box_id])
                 )
             )
         )
@@ -210,6 +243,8 @@ def solve_integrated_milp(
                     * candidate.delivery_offsets_s[box_id]
                     / data.boxes[box_id].expected_time_s
                     for box_id in candidate.box_ids
+                    if evaluation_mode != URGENT_PRIORITY_MODE
+                    or is_urgent_box(data.boxes[box_id])
                 )
             )
         )
@@ -219,10 +254,21 @@ def solve_integrated_milp(
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     phase_objectives = (
-        ("timing", sum(timing_terms)),
-        ("makespan", makespan),
-        ("energy", sum(energy_terms)),
-        ("trip_count", sum(selected)),
+        (
+            (
+                ("urgent_timing", sum(timing_terms)),
+                ("energy", sum(energy_terms)),
+                ("trip_count", sum(selected)),
+                ("makespan", makespan),
+            )
+            if evaluation_mode == URGENT_PRIORITY_MODE
+            else (
+                ("timing", sum(timing_terms)),
+                ("makespan", makespan),
+                ("energy", sum(energy_terms)),
+                ("trip_count", sum(selected)),
+            )
+        )
     )
     phase_statuses: dict[str, str] = {}
     phase_values: dict[str, int] = {}
@@ -267,7 +313,10 @@ def solve_integrated_milp(
         diagnostics = dict(bootstrap.diagnostics)
         diagnostics.update({
             "backend": "OR-Tools CP-SAT restricted integrated model",
-            "integrated_status": phase_statuses.get("timing", "NOT_RUN"),
+            "integrated_status": phase_statuses.get(
+                "urgent_timing" if evaluation_mode == URGENT_PRIORITY_MODE else "timing",
+                "NOT_RUN",
+            ),
             "incumbent_source": "integrated_primal_heuristic",
             "generated_candidate_count": len(generated_candidates),
             "candidate_count": len(candidates),
@@ -285,6 +334,8 @@ def solve_integrated_milp(
                 "lexicographic_phases_completed": 0,
                 "lexicographic_phase_statuses": phase_statuses,
             },
+            data=data,
+            evaluation_mode=evaluation_mode,
         )
 
     executions = []
@@ -327,6 +378,7 @@ def solve_integrated_milp(
             "lexicographic_phase_statuses": phase_statuses,
             "lexicographic_phase_values": phase_values,
         },
+        evaluation_mode=evaluation_mode,
     )
     return finalize_seeded_solution(
         "integrated_milp",
@@ -339,4 +391,6 @@ def solve_integrated_milp(
             "seed_candidate_count": len(seed_executions),
             "seed_hint_count": len(seed_executions),
         },
+        data=data,
+        evaluation_mode=evaluation_mode,
     )

@@ -31,6 +31,7 @@ from .problem_d_q2_schedule import (
     construct_resource_aware_boxwise_solution,
     schedule_trips_cp_sat,
 )
+from .problem_d_q2_urgent import PUBLISHED_MODE
 
 
 def _try_plan(
@@ -319,8 +320,14 @@ def _resource_aware_incumbent(
     *,
     started: float,
     diagnostics: Mapping[str, object] | None = None,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
-    incumbent = construct_resource_aware_boxwise_solution(data, candidates, "candidate")
+    incumbent = construct_resource_aware_boxwise_solution(
+        data,
+        candidates,
+        "candidate",
+        evaluation_mode=evaluation_mode,
+    )
     merged_diagnostics = dict(incumbent.diagnostics)
     merged_diagnostics.update({"candidate_count": len(candidates)})
     merged_diagnostics.update(diagnostics or {})
@@ -338,9 +345,12 @@ def solve_candidate_method(
     *,
     candidates: Sequence[TripPlan] | None = None,
     initial_solution: Q2Solution | None = None,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     started = perf_counter()
-    ensure_valid_initial_solution(data, arcs, initial_solution)
+    ensure_valid_initial_solution(
+        data, arcs, initial_solution, evaluation_mode=evaluation_mode
+    )
     generated = (
         tuple(candidates)
         if candidates is not None
@@ -358,7 +368,9 @@ def solve_candidate_method(
     if not pool:
         raise InfeasibleQ2Error("candidate pool is empty")
     try:
-        bootstrap = _resource_aware_incumbent(data, pool, started=started)
+        bootstrap = _resource_aware_incumbent(
+            data, pool, started=started, evaluation_mode=evaluation_mode
+        )
     except InfeasibleQ2Error:
         if initial_solution is None:
             raise
@@ -375,6 +387,7 @@ def solve_candidate_method(
                 selected,
                 method="candidate",
                 time_limit_s=remaining,
+                evaluation_mode=evaluation_mode,
             )
         except InfeasibleQ2Error as error:
             last_error = str(error)
@@ -396,7 +409,12 @@ def solve_candidate_method(
             runtime_s=perf_counter() - started,
             diagnostics=diagnostics,
         )
-        native = exact if solution_key(exact) < solution_key(bootstrap) else bootstrap
+        native = (
+            exact
+            if solution_key(exact, data=data, evaluation_mode=evaluation_mode)
+            < solution_key(bootstrap, data=data, evaluation_mode=evaluation_mode)
+            else bootstrap
+        )
         return finalize_seeded_solution(
             "candidate",
             native,
@@ -407,6 +425,8 @@ def solve_candidate_method(
                 **diagnostics,
                 "seed_candidate_count": len(seed_plans),
             },
+            data=data,
+            evaluation_mode=evaluation_mode,
         )
     return finalize_seeded_solution(
         "candidate",
@@ -420,4 +440,6 @@ def solve_candidate_method(
             "no_good_cut_count": len(cuts),
             "exact_search_failure": last_error,
         },
+        data=data,
+        evaluation_mode=evaluation_mode,
     )

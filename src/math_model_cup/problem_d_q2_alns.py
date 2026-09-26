@@ -17,6 +17,12 @@ from .problem_d_q2_schedule import (
     construct_resource_aware_boxwise_solution,
     schedule_trips_greedy,
 )
+from .problem_d_q2_urgent import (
+    PUBLISHED_MODE,
+    URGENT_PRIORITY_MODE,
+    is_urgent_box,
+    required_deadline_s,
+)
 
 
 DESTROY_OPERATORS = (
@@ -60,6 +66,7 @@ def _destroy_boxes(
     operator: str,
     remove_count: int,
     rng: Random,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Tuple[str, ...]:
     box_ids = [record.box_id for record in solution.deliveries]
     if operator == "random_box":
@@ -68,6 +75,10 @@ def _destroy_boxes(
         ranked = sorted(
             solution.deliveries,
             key=lambda record: (
+                1
+                if evaluation_mode == URGENT_PRIORITY_MODE
+                and is_urgent_box(data.boxes[record.box_id])
+                else 0,
                 data.boxes[record.box_id].priority_weight
                 * record.delivery_time_s
                 / data.boxes[record.box_id].expected_time_s
@@ -171,6 +182,7 @@ def _repair_plans(
     single_plans: Mapping[str, Sequence[TripPlan]],
     operator: str,
     max_stops: int,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> list[TripPlan]:
     repaired = list(plans)
     remaining = list(removed_box_ids)
@@ -179,9 +191,15 @@ def _repair_plans(
             box_id = min(
                 remaining,
                 key=lambda current: (
-                    data.boxes[current].hard_deadline_s
+                    required_deadline_s(data.boxes[current])
+                    if evaluation_mode == URGENT_PRIORITY_MODE
+                    else data.boxes[current].hard_deadline_s
                     if data.boxes[current].hard_deadline_s is not None
                     else float("inf"),
+                    0
+                    if evaluation_mode == URGENT_PRIORITY_MODE
+                    and is_urgent_box(data.boxes[current])
+                    else 1,
                     -data.boxes[current].priority_weight,
                     current,
                 ),
@@ -250,10 +268,13 @@ def solve_alns(
     initial_solution: Q2Solution | None = None,
     max_stops: int = 3,
     candidate_pool: Sequence[TripPlan] | None = None,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     """Run destroy/repair ALNS with deterministic resource decoding."""
     started = perf_counter()
-    ensure_valid_initial_solution(data, arcs, initial_solution)
+    ensure_valid_initial_solution(
+        data, arcs, initial_solution, evaluation_mode=evaluation_mode
+    )
     rng = Random(seed)
     initial_candidates = (
         tuple(candidate_pool)
@@ -264,10 +285,13 @@ def solve_alns(
     for plan in initial_candidates:
         if len(plan.box_ids) == 1:
             single_plans[plan.box_ids[0]].append(plan)
-    independent_base = construct_resource_aware_boxwise_solution(
-        data, initial_candidates, "alns"
-    )
     if initial_solution is None:
+        independent_base = construct_resource_aware_boxwise_solution(
+            data,
+            initial_candidates,
+            "alns",
+            evaluation_mode=evaluation_mode,
+        )
         initial = independent_base
         initialization = "independent_resource_aware"
     else:
@@ -301,7 +325,9 @@ def solve_alns(
             len(data.boxes),
             max(1, int(round(len(data.boxes) * rng.uniform(0.02, 0.08)))),
         )
-        removed = _destroy_boxes(data, current, destroy, remove_count, rng)
+        removed = _destroy_boxes(
+            data, current, destroy, remove_count, rng, evaluation_mode
+        )
         partial = _remove_from_plans(
             data, arcs, [trip.plan for trip in current.trips], removed
         )
@@ -314,8 +340,14 @@ def solve_alns(
                 single_plans,
                 repair,
                 max_stops,
+                evaluation_mode,
             )
-            candidate = schedule_trips_greedy(data, repaired, method="alns")
+            candidate = schedule_trips_greedy(
+                data,
+                repaired,
+                method="alns",
+                evaluation_mode=evaluation_mode,
+            )
         except InfeasibleQ2Error:
             safe_repair = list(partial) + [
                 min(single_plans[box_id], key=lambda plan: _plan_proxy_cost(data, plan))
@@ -323,7 +355,12 @@ def solve_alns(
             ]
             repair_feasibility_fallbacks += 1
             try:
-                candidate = schedule_trips_greedy(data, safe_repair, method="alns")
+                candidate = schedule_trips_greedy(
+                    data,
+                    safe_repair,
+                    method="alns",
+                    evaluation_mode=evaluation_mode,
+                )
             except InfeasibleQ2Error:
                 rejected_infeasible_moves += 1
                 no_improvement += 1
@@ -378,6 +415,7 @@ def solve_alns(
             "repair_weights": repair_weights,
             "convergence_history": history,
             "initialization": initialization,
+            "evaluation_mode": evaluation_mode,
         }
     )
     return finalize_seeded_solution(
@@ -387,4 +425,6 @@ def solve_alns(
         started=started,
         native_source="alns_search",
         diagnostics=diagnostics,
+        data=data,
+        evaluation_mode=evaluation_mode,
     )

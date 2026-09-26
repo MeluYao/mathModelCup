@@ -15,6 +15,7 @@ from .problem_d_q2_incumbent import (
     finalize_seeded_solution,
     solution_key,
 )
+from .problem_d_q2_urgent import PUBLISHED_MODE
 
 
 def solve_hybrid(
@@ -26,9 +27,12 @@ def solve_hybrid(
     time_limit_s: float = 30.0,
     *,
     initial_solution: Q2Solution | None = None,
+    evaluation_mode: str = PUBLISHED_MODE,
 ) -> Q2Solution:
     started = perf_counter()
-    ensure_valid_initial_solution(data, arcs, initial_solution)
+    ensure_valid_initial_solution(
+        data, arcs, initial_solution, evaluation_mode=evaluation_mode
+    )
     if rounds < 1:
         raise ValueError("rounds must be at least one")
     pool: Dict[Tuple[object, ...], TripPlan] = {
@@ -43,6 +47,7 @@ def solve_hybrid(
         time_limit_s=time_limit_s,
         candidates=tuple(pool.values()),
         initial_solution=initial_solution,
+        evaluation_mode=evaluation_mode,
     )
     objective_history = [current.objective]
     for round_index in range(rounds):
@@ -53,6 +58,7 @@ def solve_hybrid(
             iterations=iterations,
             initial_solution=current,
             candidate_pool=tuple(pool.values()),
+            evaluation_mode=evaluation_mode,
         )
         for trip in improved.trips:
             pool[trip.plan.signature] = trip.plan
@@ -62,8 +68,14 @@ def solve_hybrid(
             time_limit_s=time_limit_s,
             candidates=tuple(pool.values()),
             initial_solution=current,
+            evaluation_mode=evaluation_mode,
         )
-        current = min((current, improved, refreshed), key=solution_key)
+        current = min(
+            (current, improved, refreshed),
+            key=lambda solution: solution_key(
+                solution, data=data, evaluation_mode=evaluation_mode
+            ),
+        )
         objective_history.append(current.objective)
 
     diagnostics = dict(current.diagnostics)
@@ -75,6 +87,7 @@ def solve_hybrid(
             "candidate_time_limit_s": time_limit_s,
             "final_candidate_count": len(pool),
             "objective_history": objective_history,
+            "evaluation_mode": evaluation_mode,
         }
     )
     return finalize_seeded_solution(
@@ -84,4 +97,6 @@ def solve_hybrid(
         started=started,
         native_source="hybrid_search",
         diagnostics=diagnostics,
+        data=data,
+        evaluation_mode=evaluation_mode,
     )
