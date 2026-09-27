@@ -337,6 +337,7 @@ CP-SAT 方案共使用 21 个架次，在保证 31 箱急送物资和 49 箱普�
 
 ## 16. 结果文件
 
+- 第二问补充模型求解流程图：`GMCM2026(3)/GMCM2026/2-7_问题二补充模型求解流程.png`
 - CP-SAT 逐架次与逐箱明细：`outputs/problem_d_q2_urgent_priority/integrated_milp/`
 - CP-SAT 架次表：`outputs/problem_d_q2_urgent_priority/integrated_milp/trips.csv`
 - CP-SAT 逐箱送达表：`outputs/problem_d_q2_urgent_priority/integrated_milp/deliveries.csv`
